@@ -1,1 +1,1 @@
-# Template Module
+# Publisher Module
