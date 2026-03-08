@@ -23,4 +23,8 @@ public class SafeInboxUpdater implements InboxUpdater {
             throw new InboxUpdateException(idempotencyKey, e.getMessage(), e);
         }
     }
+
+    public static SafeInboxUpdater of(InboxUpdater updater) {
+        return new SafeInboxUpdater(updater);
+    }
 }

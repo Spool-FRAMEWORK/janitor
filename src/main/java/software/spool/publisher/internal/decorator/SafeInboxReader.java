@@ -24,4 +24,8 @@ public class SafeInboxReader implements InboxReader {
             throw new InboxReadException(e.getMessage(), e);
         }
     }
+
+    public static SafeInboxReader of(InboxReader reader) {
+        return new SafeInboxReader(reader);
+    }
 }

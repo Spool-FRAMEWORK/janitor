@@ -7,6 +7,11 @@ import software.spool.publisher.api.port.InboxReader;
 import software.spool.publisher.api.port.InboxUpdater;
 import software.spool.publisher.api.strategy.PollingPublisher;
 import software.spool.publisher.internal.control.InboxItemHandler;
+import software.spool.publisher.internal.decorator.SafeEventBusEmitter;
+import software.spool.publisher.internal.decorator.SafeInboxReader;
+import software.spool.publisher.internal.decorator.SafeInboxUpdater;
+import software.spool.publisher.internal.util.InMemoryEventBus;
+import software.spool.publisher.internal.util.InMemoryInbox;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -18,24 +23,29 @@ public class PollingPublisherBuilder {
     private Duration interval;
     private ErrorRouter errorRouter;
 
-    private PollingPublisherBuilder() {}
+    private PollingPublisherBuilder() {
+        InMemoryInbox inbox = new InMemoryInbox();
+        this.reader = inbox;
+        this.updater = inbox;
+        this.emitter = new InMemoryEventBus();
+    }
 
     public static PollingPublisherBuilder create() {
         return new PollingPublisherBuilder();
     }
 
     public PollingPublisherBuilder from(InboxReader reader) {
-        this.reader = reader;
+        this.reader = SafeInboxReader.of(reader);
         return this;
     }
 
     public PollingPublisherBuilder with(InboxUpdater updater) {
-        this.updater = updater;
+        this.updater = SafeInboxUpdater.of(updater);
         return this;
     }
 
     public PollingPublisherBuilder on(EventBusEmitter emitter) {
-        this.emitter = emitter;
+        this.emitter = SafeEventBusEmitter.of(emitter);
         return this;
     }
 

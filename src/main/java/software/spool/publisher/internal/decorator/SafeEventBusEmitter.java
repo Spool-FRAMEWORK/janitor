@@ -21,4 +21,8 @@ public class SafeEventBusEmitter implements EventBusEmitter {
             throw new EventBusEmitException(event, e.getMessage(), e);
         }
     }
+
+    public static SafeEventBusEmitter of(EventBusEmitter emitter) {
+        return new SafeEventBusEmitter(emitter);
+    }
 }

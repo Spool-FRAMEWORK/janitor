@@ -23,4 +23,8 @@ public class SafeEventBusListener implements EventBusListener {
             throw new EventBusListenException(event, e.getMessage(), e);
         }
     }
+
+    public static SafeEventBusListener of(EventBusListener listener) {
+        return new SafeEventBusListener(listener);
+    }
 }

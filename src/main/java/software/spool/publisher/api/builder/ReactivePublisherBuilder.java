@@ -7,6 +7,11 @@ import software.spool.publisher.api.port.EventBusListener;
 import software.spool.publisher.api.port.InboxUpdater;
 import software.spool.publisher.api.strategy.ReactivePublisher;
 import software.spool.publisher.internal.control.InboxItemStoredHandler;
+import software.spool.publisher.internal.decorator.SafeEventBusEmitter;
+import software.spool.publisher.internal.decorator.SafeEventBusListener;
+import software.spool.publisher.internal.decorator.SafeInboxUpdater;
+import software.spool.publisher.internal.util.InMemoryEventBus;
+import software.spool.publisher.internal.util.InMemoryInbox;
 
 import java.util.Objects;
 
@@ -16,24 +21,29 @@ public class ReactivePublisherBuilder {
     private EventBusEmitter emitter;
     private ErrorRouter errorRouter;
 
-    private ReactivePublisherBuilder() {}
+    private ReactivePublisherBuilder() {
+        InMemoryEventBus bus = new InMemoryEventBus();
+        this.listener = bus;
+        this.updater = new InMemoryInbox();
+        this.emitter = bus;
+    }
 
     public static ReactivePublisherBuilder create() {
         return new ReactivePublisherBuilder();
     }
 
     public ReactivePublisherBuilder from(EventBusListener listener) {
-        this.listener = listener;
+        this.listener = SafeEventBusListener.of(listener);
         return this;
     }
 
     public ReactivePublisherBuilder with(InboxUpdater updater) {
-        this.updater = updater;
+        this.updater = SafeInboxUpdater.of(updater);
         return this;
     }
 
     public ReactivePublisherBuilder on(EventBusEmitter emitter) {
-        this.emitter = emitter;
+        this.emitter = SafeEventBusEmitter.of(emitter);
         return this;
     }
 
