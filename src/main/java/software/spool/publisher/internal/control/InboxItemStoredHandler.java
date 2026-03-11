@@ -2,9 +2,7 @@ package software.spool.publisher.internal.control;
 
 import software.spool.core.control.Handler;
 import software.spool.core.model.*;
-import software.spool.publisher.api.InboxItem;
-import software.spool.publisher.api.port.EventBusEmitter;
-import software.spool.publisher.api.port.InboxUpdater;
+import software.spool.core.port.*;
 
 import java.util.Objects;
 

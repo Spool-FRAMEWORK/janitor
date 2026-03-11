@@ -1,16 +1,15 @@
 package software.spool.publisher.api;
 
-import software.spool.publisher.api.strategy.PublisherStrategy;
-import software.spool.publisher.internal.port.Subscription;
+import software.spool.core.utils.ErrorRouter;
+import software.spool.publisher.api.strategy.FeederStrategy;
+import software.spool.core.port.Subscription;
 
-import java.util.function.Supplier;
-
-public class Publisher {
-    private final PublisherStrategy strategy;
+public class Feeder {
+    private final FeederStrategy strategy;
     private Subscription subscription;
     private final ErrorRouter errorRouter;
 
-    public Publisher(PublisherStrategy strategy, ErrorRouter errorRouter) {
+    public Feeder(FeederStrategy strategy, ErrorRouter errorRouter) {
         this.strategy = strategy;
         this.subscription = Subscription.NULL;
         this.errorRouter = errorRouter;

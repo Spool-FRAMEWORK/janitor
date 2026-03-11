@@ -13,8 +13,8 @@
     </repositories>
 
     <groupId>software.spool</groupId>
-    <artifactId>publisher</artifactId>
-    <version>1.0.1-SNAPSHOT</version>
+    <artifactId>feeder</artifactId>
+    <version>1.0.2-SNAPSHOT</version>
     <packaging>jar</packaging>
 
     <name>${project.groupId}:${project.artifactId}</name>
@@ -87,7 +87,7 @@
         <dependency>
             <groupId>io.github.spool-framework</groupId>
             <artifactId>core</artifactId>
-            <version>1.0.6-SNAPSHOT</version>
+            <version>1.0.10-SNAPSHOT</version>
         </dependency>
     </dependencies>
 </project>

@@ -77,7 +77,7 @@ The flow is straightforward:
 ```xml
 <dependency>
     <groupId>software.spool</groupId>
-    <artifactId>publisher</artifactId>
+    <artifactId>feeder</artifactId>
     <version>1.0.0-SNAPSHOT</version>
 </dependency>
 ```
@@ -116,12 +116,12 @@ That's it. After calling `.build()`, the Publisher automatically subscribes to t
 
 ### Minimal Example
 
-The simplest case: a publisher using the in-memory bus, a default channel, and an updater that just prints to the console.
+The simplest case: a feeder using the in-memory bus, a default channel, and an updater that just prints to the console.
 
 ```java
 
-import software.spool.publisher.api.ChannelRouter;
-import software.spool.publisher.api.ErrorRouter;
+import software.spool.feeder.api.ChannelRouter;
+import software.spool.feeder.api.ErrorRouter;
 
 var bus = new InMemoryEventBusEmitter();
 
@@ -257,8 +257,8 @@ The `ErrorRouter` tries each registered handler in order. If none match the exce
 In a production environment, you would implement `EventBus` and `InboxUpdater` with real infrastructure.
 
 ```java
-import software.spool.publisher.api.port.EventBusEmitter;
-import software.spool.publisher.api.port.InboxUpdater;
+import software.spool.feeder.api.port.EventBusEmitter;
+import software.spool.feeder.api.port.InboxUpdater;
 
 // --- EventBus implementation with Kafka ---
 public class KafkaEventBus implements EventBusEmitter {
@@ -334,7 +334,7 @@ public class PublisherConfig {
                     log.warn("Skipping duplicate: {}", e.idempotencyKey()))
             .on(SerializationException.class, e ->
                     log.error("Serialization failed", e))
-            .orElse(e -> log.error("Unhandled publisher error", e));
+            .orElse(e -> log.error("Unhandled feeder error", e));
 
     Publisher.sender("order-service")
             .updater(updater)
@@ -444,7 +444,7 @@ bus.emit(sensorEvent, "iot.raw");
 | `.on(EventBus)` | `PublisherBuilder` | Sets the event bus to use. |
 | `.with(ChannelRouter)` | `PublisherBuilder` | Sets the channel router. |
 | `.with(ErrorRouter)` | `PublisherBuilder` | Sets the error router. |
-| `.build()` | `void` | Builds and registers the publisher on the bus. Throws `NullPointerException` if any component is missing. |
+| `.build()` | `void` | Builds and registers the feeder on the bus. Throws `NullPointerException` if any component is missing. |
 
 ### `ChannelRouter`
 
