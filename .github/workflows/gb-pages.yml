@@ -1,17 +1,20 @@
-name: Deploy Javadoc doc/javadoc → GitHub Pages
+name: Deploy Javadoc → GitHub Pages
 on:
   push:
-    branches: [ doc/javadoc ]
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
 jobs:
   deploy-docs:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -20,23 +23,24 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
+          server-id: github
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
 
-      - name: Generate Javadoc → doc/
-        run: |
-          mkdir -p doc
-          mvn javadoc:javadoc -DoutputDirectory=doc -Dquiet=true -DskipTests
+      - name: Generate Javadoc
+        run: mvn javadoc:javadoc -DskipTests -Dquiet=true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
 
-      - name: Create .nojekyll (disable Jekyll)
-        run: touch doc/.nojekyll
+      - name: Create .nojekyll
+        run: touch target/reports/apidocs/.nojekyll
 
-      - name: Debug doc contents
-        run: ls -la doc/
-
-      - name: Deploy doc/ to gh-pages
-        uses: peaceiris/actions-gh-pages@v4
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./doc
-          publish_branch: gh-pages
-          force_orphan: true
-          commit_message: "Deploy Javadoc"
+          path: ./target/reports/apidocs
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
