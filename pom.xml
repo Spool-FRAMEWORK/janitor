@@ -14,7 +14,7 @@
 
     <groupId>software.spool</groupId>
     <artifactId>feeder</artifactId>
-    <version>1.0.3-SNAPSHOT</version>
+    <version>1.0.4-SNAPSHOT</version>
     <packaging>jar</packaging>
 
     <name>${project.groupId}:${project.artifactId}</name>

@@ -55,7 +55,7 @@ public class PollingFeeder implements FeederStrategy {
     public Subscription start() {
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         scheduler.scheduleWithFixedDelay(
-                () -> reader.findByStatus(InboxItemStatus.PUBLISHING).map(this::toEvent).forEach(handler::handle),
+                () -> reader.findByStatus(InboxItemStatus.UNPUBLISHED).map(this::toEvent).forEach(handler::handle),
                 0, interval.toMillis(), TimeUnit.MILLISECONDS);
         return new Subscription() {
             public void cancel() {
