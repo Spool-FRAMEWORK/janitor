@@ -29,11 +29,14 @@ public class FeederErrorRouter {
          */
         public static ErrorRouter defaults(EventBusEmitter bus) {
                 return new ErrorRouter()
-                                .on(InboxReadException.class,
-                                                (e, cause) -> bus.emit(InboxItemConsumptionFailed.builder()
-                                                                .errorMessage(e.getMessage()).build()))
-                                .on(InboxUpdateException.class,
-                                                (e, cause) -> bus.emit(InboxItemStoreFailed.builder()
-                                                                .from(cause).errorMessage(e.getMessage()).build()));
+                        .on(InboxReadException.class, (e, cause) ->
+                                bus.emit(InboxItemConsumptionFailed.builder()
+                                        .errorMessage(e.getMessage()).build()))
+                        .on(InboxUpdateException.class, (e, cause) ->
+                                bus.emit(InboxItemStoreFailed.builder()
+                                        .from(cause).errorMessage(e.getMessage()).build()))
+                        .on(EventBusEmitException.class, (e, cause) ->
+                                System.err.println(e.getMessage()));
+
         }
 }

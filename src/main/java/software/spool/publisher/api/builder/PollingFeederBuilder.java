@@ -110,7 +110,7 @@ public class PollingFeederBuilder {
         Objects.requireNonNull(updater, "updater cannot be null");
         Objects.requireNonNull(errorRouter, "errorRouter cannot be null");
         return new Feeder(
-                new PollingFeeder(reader, new InboxItemStoredHandler(updater, emitter), interval),
+                new PollingFeeder(reader, new InboxItemStoredHandler(updater, emitter, errorRouter), interval),
                 errorRouter);
     }
 }

@@ -96,7 +96,7 @@ public class ReactiveFeederBuilder {
         Objects.requireNonNull(emitter, "emitter is required");
         Objects.requireNonNull(errorRouter, "errorRouter is required");
         return new Feeder(
-                new ReactiveFeeder(listener, new InboxItemStoredHandler(updater, emitter)),
+                new ReactiveFeeder(listener, new InboxItemStoredHandler(updater, emitter, errorRouter)),
                 errorRouter);
     }
 }
