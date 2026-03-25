@@ -4,10 +4,10 @@ import software.spool.core.control.Handler;
 import software.spool.core.model.InboxItem;
 import software.spool.core.model.InboxItemStatus;
 import software.spool.core.model.InboxItemStored;
+import software.spool.core.port.PollingScheduler;
 import software.spool.core.utils.CancellationToken;
+import software.spool.core.utils.PollingPolicy;
 import software.spool.feeder.api.port.InboxReader;
-import software.spool.feeder.api.utils.PollingPolicy;
-import software.spool.feeder.internal.scheduler.PollingScheduler;
 
 import java.util.Objects;
 

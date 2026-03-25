@@ -4,19 +4,18 @@ import software.spool.core.control.Handler;
 import software.spool.core.model.InboxItemStored;
 import software.spool.core.port.EventBusEmitter;
 import software.spool.core.port.InboxUpdater;
+import software.spool.core.port.PollingScheduler;
 import software.spool.core.port.decorator.SafeEventBusEmitter;
 import software.spool.core.port.decorator.SafeInboxUpdater;
 import software.spool.core.utils.ErrorRouter;
+import software.spool.core.utils.PollingPolicy;
 import software.spool.feeder.api.Feeder;
 import software.spool.feeder.api.port.InboxReader;
 import software.spool.feeder.api.strategy.PollingFeeder;
-import software.spool.feeder.api.utils.PollingPolicy;
 import software.spool.feeder.internal.port.decorator.SafeInboxReader;
 import software.spool.feeder.internal.control.InboxItemStoredHandler;
-import software.spool.feeder.internal.scheduler.PollingScheduler;
 
 import java.time.Duration;
-import java.util.Objects;
 
 /**
  * Fluent builder that configures and assembles a polling-based {@link Feeder}.
