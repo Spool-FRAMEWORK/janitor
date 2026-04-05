@@ -1,47 +1,52 @@
 package software.spool.feeder.api.builder;
 
-/**
- * Factory entry point for creating pre-configured feeder builders.
- *
- * <p>
- * Two strategies are available:
- * </p>
- * <ul>
- * <li>{@link #polling()} — creates a polling-based feeder that queries the
- * inbox
- * at a fixed interval.</li>
- * <li>{@link #reactive()} — creates a reactive feeder that listens for
- * {@code InboxItemStored} events on the event bus.</li>
- * </ul>
- *
- * <pre>{@code
- * Feeder feeder = FeederBuilderFactory.reactive()
- *         .from(eventBusListener)
- *         .with(inboxUpdater)
- *         .on(eventBusEmitter)
- *         .withErrorRouter(errorRouter)
- *         .create();
- * }</pre>
- *
- * @see PollingFeederBuilder
- * @see ReactiveFeederBuilder
- */
+import software.spool.core.adapter.watchdog.HttpWatchdogClient;
+import software.spool.core.model.watchdog.ModuleIdentity;
+import software.spool.core.port.watchdog.ModuleHeartBeat;
+import software.spool.core.utils.polling.PollingHeartbeat;
+
+import java.util.Objects;
+
 public class FeederBuilderFactory {
-    /**
-     * Creates a builder for a polling-based feeder.
-     *
-     * @return a new {@link PollingFeederBuilder}
-     */
     public static PollingFeederBuilder polling() {
-        return new PollingFeederBuilder();
+        return new Configuration().polling();
     }
 
-    /**
-     * Creates a builder for a reactive (event-driven) feeder.
-     *
-     * @return a new {@link ReactiveFeederBuilder}
-     */
     public static ReactiveFeederBuilder reactive() {
-        return new ReactiveFeederBuilder();
+        return new Configuration().reactive();
+    }
+
+    public static Configuration watchdog(String url, String moduleId) {
+        return new Configuration(url, moduleId);
+    }
+
+    public static final class Configuration {
+        private final String watchdogUrl;
+        private final String moduleId;
+
+        private Configuration(String watchdogUrl, String moduleId) {
+            this.watchdogUrl = watchdogUrl;
+            this.moduleId = moduleId;
+        }
+
+        private Configuration() {
+            this(null, "feeder");
+        }
+
+        public PollingFeederBuilder polling() {
+            return new PollingFeederBuilder(buildHeartbeat(watchdogUrl, moduleId));
+        }
+
+        public ReactiveFeederBuilder reactive() {
+            return new ReactiveFeederBuilder(buildHeartbeat(watchdogUrl, moduleId));
+        }
+    }
+
+    private static ModuleHeartBeat buildHeartbeat(String watchdogUrl, String moduleId) {
+        return Objects.isNull(watchdogUrl) ?
+                ModuleHeartBeat.NOOP : new PollingHeartbeat(
+                new HttpWatchdogClient(watchdogUrl),
+                ModuleIdentity.of(moduleId)
+        );
     }
 }

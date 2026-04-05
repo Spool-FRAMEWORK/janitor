@@ -1,7 +1,11 @@
 package software.spool.feeder.api;
 
-import software.spool.core.utils.CancellationToken;
-import software.spool.core.utils.ErrorRouter;
+import software.spool.core.model.spool.SpoolModule;
+import software.spool.core.model.spool.SpoolNode;
+import software.spool.core.port.health.HealthPayload;
+import software.spool.core.port.watchdog.ModuleHeartBeat;
+import software.spool.core.utils.polling.CancellationToken;
+import software.spool.core.utils.routing.ErrorRouter;
 import software.spool.feeder.api.strategy.FeederStrategy;
 
 import java.util.Objects;
@@ -35,10 +39,11 @@ import java.util.Objects;
  * @see FeederStrategy
  * @see software.spool.feeder.api.builder.FeederBuilderFactory
  */
-public class Feeder {
+public class Feeder implements SpoolModule {
     private final FeederStrategy strategy;
     private CancellationToken token;
     private final ErrorRouter errorRouter;
+    private final ModuleHeartBeat heartBeat;
 
     /**
      * Creates a new {@code Feeder} with the given strategy and error router.
@@ -47,10 +52,11 @@ public class Feeder {
      * @param errorRouter the error router for handling exceptions; must not be
      *                    {@code null}
      */
-    public Feeder(FeederStrategy strategy, ErrorRouter errorRouter) {
+    public Feeder(FeederStrategy strategy, ErrorRouter errorRouter, ModuleHeartBeat heartBeat) {
         this.strategy = Objects.requireNonNull(strategy);
-        this.token  = CancellationToken.NONE;
         this.errorRouter = Objects.requireNonNull(errorRouter);
+        this.heartBeat = heartBeat;
+        this.token  = CancellationToken.NOOP;
     }
 
     /**
@@ -63,11 +69,14 @@ public class Feeder {
      * configured {@link ErrorRouter}.
      * </p>
      */
-    public void startFeeding() {
+    @Override
+    public void start(SpoolNode.StartPermit permit) {
         if (token.isActive()) return;
+        Objects.requireNonNull(permit);
         token = CancellationToken.create();
         try {
             strategy.execute(token);
+            heartBeat.start();
         } catch (Exception e) {
             errorRouter.dispatch(e);
         }
@@ -82,14 +91,21 @@ public class Feeder {
      * configured {@link ErrorRouter}.
      * </p>
      */
-    public void stopFeeding() {
-        if (!token.isActive())
-            return;
+    @Override
+    public void stop(SpoolNode.StartPermit permit) {
+        if (!token.isActive()) return;
+        Objects.requireNonNull(permit);
         try {
             token.cancel();
-            token = CancellationToken.NONE;
+            heartBeat.stop();
+            token = CancellationToken.NOOP;
         } catch (Exception e) {
             errorRouter.dispatch(e);
         }
+    }
+
+    @Override
+    public HealthPayload checkHealth() {
+        return token.isActive() ? HealthPayload.healthy(heartBeat.identity().moduleId()) : HealthPayload.degraded(heartBeat.identity().moduleId(), null);
     }
 }

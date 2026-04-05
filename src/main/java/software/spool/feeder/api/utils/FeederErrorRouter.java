@@ -1,9 +1,10 @@
 package software.spool.feeder.api.utils;
 
 import software.spool.core.exception.*;
-import software.spool.core.model.*;
-import software.spool.core.port.EventBusEmitter;
-import software.spool.core.utils.ErrorRouter;
+import software.spool.core.model.failure.InboxItemConsumptionFailed;
+import software.spool.core.model.failure.InboxItemStoreFailed;
+import software.spool.core.port.bus.EventBusEmitter;
+import software.spool.core.utils.routing.ErrorRouter;
 
 /**
  * Provides the default {@link ErrorRouter} configuration for the publisher.

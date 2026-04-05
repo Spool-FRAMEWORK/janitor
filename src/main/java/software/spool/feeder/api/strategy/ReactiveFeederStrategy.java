@@ -1,9 +1,9 @@
 package software.spool.feeder.api.strategy;
 
-import software.spool.core.control.Handler;
-import software.spool.core.model.InboxItemStored;
-import software.spool.core.port.*;
-import software.spool.core.utils.CancellationToken;
+import software.spool.core.model.event.InboxItemStored;
+import software.spool.core.port.bus.EventBusListener;
+import software.spool.core.port.bus.Handler;
+import software.spool.core.utils.polling.CancellationToken;
 
 import java.util.Objects;
 
@@ -23,7 +23,7 @@ import java.util.Objects;
  * where items should be published as soon as they arrive in the inbox.
  * </p>
  */
-public class ReactiveFeeder implements FeederStrategy {
+public class ReactiveFeederStrategy implements FeederStrategy {
     private final EventBusListener eventBusListener;
     private final Handler<InboxItemStored> handler;
 
@@ -33,7 +33,7 @@ public class ReactiveFeeder implements FeederStrategy {
      * @param eventBusListener the event bus listener to subscribe with
      * @param handler          the handler that processes each inbox item
      */
-    public ReactiveFeeder(EventBusListener eventBusListener, Handler<InboxItemStored> handler) {
+    public ReactiveFeederStrategy(EventBusListener eventBusListener, Handler<InboxItemStored> handler) {
         this.eventBusListener = Objects.requireNonNull(eventBusListener);
         this.handler = Objects.requireNonNull(handler);
     }

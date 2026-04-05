@@ -1,8 +1,8 @@
 package software.spool.feeder.api.port;
 
 import software.spool.core.exception.InboxReadException;
-import software.spool.core.model.InboxItem;
 import software.spool.core.model.InboxItemStatus;
+import software.spool.core.model.vo.InboxItem;
 
 import java.util.stream.Stream;
 

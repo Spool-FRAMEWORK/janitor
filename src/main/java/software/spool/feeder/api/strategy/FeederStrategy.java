@@ -1,8 +1,7 @@
 package software.spool.feeder.api.strategy;
 
 import software.spool.core.exception.SpoolException;
-import software.spool.core.port.Subscription;
-import software.spool.core.utils.CancellationToken;
+import software.spool.core.utils.polling.CancellationToken;
 
 /**
  * Strategy interface that defines how the publisher discovers and processes
@@ -12,13 +11,13 @@ import software.spool.core.utils.CancellationToken;
  * Two built-in implementations are provided:
  * </p>
  * <ul>
- * <li>{@link ReactiveFeeder} — listens for {@code InboxItemStored} events
+ * <li>{@link ReactiveFeederStrategy} — listens for {@code InboxItemStored} events
  * on the event bus.</li>
- * <li>{@link PollingFeeder} — polls the inbox at a fixed interval.</li>
+ * <li>{@link PollingFeederStrategy} — polls the inbox at a fixed interval.</li>
  * </ul>
  *
- * @see ReactiveFeeder
- * @see PollingFeeder
+ * @see ReactiveFeederStrategy
+ * @see PollingFeederStrategy
  */
 public interface FeederStrategy {
     /**

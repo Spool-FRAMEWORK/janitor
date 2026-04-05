@@ -1,100 +1,57 @@
 package software.spool.feeder.api.builder;
 
-import software.spool.core.control.Handler;
-import software.spool.core.model.InboxItemStored;
-import software.spool.core.port.EventBusEmitter;
-import software.spool.core.port.EventBusListener;
-import software.spool.core.port.InboxUpdater;
+import software.spool.core.port.bus.EventBusEmitter;
+import software.spool.core.port.bus.EventBusListener;
 import software.spool.core.port.decorator.SafeEventBusEmitter;
 import software.spool.core.port.decorator.SafeEventBusListener;
 import software.spool.core.port.decorator.SafeInboxUpdater;
-import software.spool.core.utils.ErrorRouter;
+import software.spool.core.port.inbox.InboxUpdater;
+import software.spool.core.port.watchdog.ModuleHeartBeat;
+import software.spool.core.utils.routing.ErrorRouter;
 import software.spool.feeder.api.Feeder;
-import software.spool.feeder.api.strategy.ReactiveFeeder;
+import software.spool.feeder.api.strategy.ReactiveFeederStrategy;
 import software.spool.feeder.internal.control.InboxItemStoredHandler;
 
-import java.util.Objects;
-
-/**
- * Fluent builder that configures and assembles a reactive {@link Feeder}.
- *
- * <p>
- * The resulting feeder listens for {@code InboxItemStored} events on the
- * event bus and publishes each item immediately. All ports are automatically
- * wrapped in their corresponding {@code Safe*} decorators.
- * </p>
- *
- * <pre>{@code
- * Feeder feeder = FeederBuilderFactory.reactive()
- *         .from(eventBusListener)
- *         .with(inboxUpdater)
- *         .on(eventBusEmitter)
- *         .withErrorRouter(errorRouter)
- *         .create();
- * }</pre>
- */
 public class ReactiveFeederBuilder {
+    private final ModuleHeartBeat heartbeat;
     private EventBusListener listener;
     private InboxUpdater updater;
     private EventBusEmitter emitter;
     private ErrorRouter errorRouter;
 
-    ReactiveFeederBuilder() {
+    ReactiveFeederBuilder(ModuleHeartBeat heartbeat) {
+        this.heartbeat = heartbeat;
     }
 
-    /**
-     * Sets the event bus listener the feeder subscribes to.
-     *
-     * @param listener the event bus listener; must not be {@code null}
-     * @return this builder for chaining
-     */
     public ReactiveFeederBuilder from(EventBusListener listener) {
         this.listener = SafeEventBusListener.of(listener);
         return this;
     }
 
-    /**
-     * Sets the inbox updater used to change inbox item statuses.
-     *
-     * @param updater the inbox updater; must not be {@code null}
-     * @return this builder for chaining
-     */
     public ReactiveFeederBuilder with(InboxUpdater updater) {
         this.updater = SafeInboxUpdater.of(updater);
         return this;
     }
 
-    /**
-     * Sets the event bus emitter for publishing {@code ItemPublished} events.
-     *
-     * @param emitter the event bus emitter; must not be {@code null}
-     * @return this builder for chaining
-     */
     public ReactiveFeederBuilder on(EventBusEmitter emitter) {
         this.emitter = SafeEventBusEmitter.of(emitter);
         return this;
     }
 
-    /**
-     * Sets the error router for handling exceptions during publishing.
-     *
-     * @param errorRouter the error router; must not be {@code null}
-     * @return this builder for chaining
-     */
     public ReactiveFeederBuilder withErrorRouter(ErrorRouter errorRouter) {
         this.errorRouter = errorRouter;
         return this;
     }
 
-    /**
-     * Builds and returns the configured reactive {@link Feeder}.
-     *
-     * @return a new {@code Feeder} ready to start publishing
-     * @throws NullPointerException if any required port has not been set
-     */
     public Feeder create() {
-        Handler<InboxItemStored> handler = new InboxItemStoredHandler(updater, emitter, errorRouter);
-        ReactiveFeeder strategy = new ReactiveFeeder(listener, handler);
-        return new Feeder(strategy, errorRouter);
+        return new Feeder(initializeStrategy(), errorRouter, heartbeat);
+    }
+
+    private ReactiveFeederStrategy initializeStrategy() {
+        return new ReactiveFeederStrategy(listener, initializeHandler());
+    }
+
+    private InboxItemStoredHandler initializeHandler() {
+        return new InboxItemStoredHandler(updater, emitter, errorRouter);
     }
 }

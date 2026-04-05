@@ -1,20 +1,23 @@
 package software.spool.feeder.api.builder;
 
-import software.spool.core.control.Handler;
-import software.spool.core.model.InboxItemStored;
-import software.spool.core.port.EventBusEmitter;
-import software.spool.core.port.InboxUpdater;
+import software.spool.core.model.event.InboxItemStored;
+import software.spool.core.port.bus.EventBusEmitter;
+import software.spool.core.port.bus.Handler;
 import software.spool.core.port.decorator.SafeEventBusEmitter;
 import software.spool.core.port.decorator.SafeInboxUpdater;
-import software.spool.core.utils.ErrorRouter;
-import software.spool.core.utils.PollingConfiguration;
+import software.spool.core.port.inbox.InboxUpdater;
+import software.spool.core.port.watchdog.ModuleHeartBeat;
+import software.spool.core.utils.polling.PollingConfiguration;
+import software.spool.core.utils.routing.ErrorRouter;
 import software.spool.feeder.api.Feeder;
 import software.spool.feeder.api.port.InboxReader;
-import software.spool.feeder.api.strategy.PollingFeeder;
+import software.spool.feeder.api.strategy.PollingFeederStrategy;
+import software.spool.feeder.api.utils.FeederErrorRouter;
 import software.spool.feeder.internal.port.decorator.SafeInboxReader;
 import software.spool.feeder.internal.control.InboxItemStoredHandler;
 
 import java.time.Duration;
+import java.util.Objects;
 
 /**
  * Fluent builder that configures and assembles a polling-based {@link Feeder}.
@@ -36,13 +39,15 @@ import java.time.Duration;
  * }</pre>
  */
 public class PollingFeederBuilder {
+    private final ModuleHeartBeat heartBeat;
     private InboxReader reader;
     private InboxUpdater updater;
     private EventBusEmitter emitter;
     private PollingConfiguration pollingConfiguration;
     private ErrorRouter errorRouter;
 
-    PollingFeederBuilder() {
+    PollingFeederBuilder(ModuleHeartBeat heartBeat) {
+        this.heartBeat = heartBeat;
     }
 
     /**
@@ -107,8 +112,18 @@ public class PollingFeederBuilder {
      * @throws NullPointerException if any required port has not been set
      */
     public Feeder create() {
-        Handler<InboxItemStored> handler = new InboxItemStoredHandler(updater, emitter, errorRouter);
-        PollingFeeder strategy = new PollingFeeder(reader, handler, pollingConfiguration);
-        return new Feeder(strategy, errorRouter);
+        return new Feeder(initializeStrategy(initializeHandler()), getErrorRouter(), heartBeat);
+    }
+
+    private ErrorRouter getErrorRouter() {
+        return Objects.requireNonNullElse(errorRouter, FeederErrorRouter.defaults(emitter));
+    }
+
+    private PollingFeederStrategy initializeStrategy(Handler<InboxItemStored> handler) {
+        return new PollingFeederStrategy(reader, handler, pollingConfiguration);
+    }
+
+    private InboxItemStoredHandler initializeHandler() {
+        return new InboxItemStoredHandler(updater, emitter, getErrorRouter());
     }
 }
