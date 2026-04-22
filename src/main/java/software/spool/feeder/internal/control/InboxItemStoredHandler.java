@@ -53,7 +53,6 @@ public class InboxItemStoredHandler implements Handler<InboxItemStored> {
         try {
             emitter.emit(ItemPublished.builder()
                     .from(object)
-                    .payload(item.payload())
                     .partitionKeySchema(item.partitionKeySchema())
                     .addMetadata(item.metadata())
                     .build());
