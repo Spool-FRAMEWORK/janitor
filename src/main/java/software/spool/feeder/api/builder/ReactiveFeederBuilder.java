@@ -1,9 +1,9 @@
 package software.spool.feeder.api.builder;
 
-import software.spool.core.port.bus.EventBusEmitter;
-import software.spool.core.port.bus.EventBusListener;
-import software.spool.core.port.decorator.SafeEventBusEmitter;
-import software.spool.core.port.decorator.SafeEventBusListener;
+import software.spool.core.port.bus.EventPublisher;
+import software.spool.core.port.bus.EventSubscriber;
+import software.spool.core.port.decorator.SafeEventPublisher;
+import software.spool.core.port.decorator.SafeEventSubscriber;
 import software.spool.core.port.decorator.SafeInboxUpdater;
 import software.spool.core.port.inbox.InboxUpdater;
 import software.spool.core.port.watchdog.ModuleHeartBeat;
@@ -11,23 +11,23 @@ import software.spool.core.utils.routing.ErrorRouter;
 import software.spool.feeder.api.Feeder;
 import software.spool.feeder.api.strategy.ReactiveFeederStrategy;
 import software.spool.feeder.api.utils.FeederErrorRouter;
-import software.spool.feeder.internal.control.InboxItemStoredHandler;
+import software.spool.feeder.internal.control.EnvelopeStoredHandler;
 
 import java.util.Objects;
 
 public class ReactiveFeederBuilder {
     private final ModuleHeartBeat heartbeat;
-    private EventBusListener listener;
+    private EventSubscriber listener;
     private InboxUpdater updater;
-    private EventBusEmitter emitter;
+    private EventPublisher emitter;
     private ErrorRouter errorRouter;
 
     ReactiveFeederBuilder(ModuleHeartBeat heartbeat) {
         this.heartbeat = heartbeat;
     }
 
-    public ReactiveFeederBuilder from(EventBusListener listener) {
-        this.listener = SafeEventBusListener.of(listener);
+    public ReactiveFeederBuilder from(EventSubscriber listener) {
+        this.listener = SafeEventSubscriber.of(listener);
         return this;
     }
 
@@ -36,8 +36,8 @@ public class ReactiveFeederBuilder {
         return this;
     }
 
-    public ReactiveFeederBuilder on(EventBusEmitter emitter) {
-        this.emitter = SafeEventBusEmitter.of(emitter);
+    public ReactiveFeederBuilder on(EventPublisher emitter) {
+        this.emitter = SafeEventPublisher.of(emitter);
         return this;
     }
 
@@ -54,8 +54,8 @@ public class ReactiveFeederBuilder {
         return Objects.isNull(errorRouter) ? FeederErrorRouter.defaults(emitter) : errorRouter;
     }
 
-    private InboxItemStoredHandler initializeHandler() {
-        return new InboxItemStoredHandler(updater, emitter, getErrorRouter());
+    private EnvelopeStoredHandler initializeHandler() {
+        return new EnvelopeStoredHandler(updater, emitter, getErrorRouter());
     }
 
     private ReactiveFeederStrategy initializeStrategy() {
