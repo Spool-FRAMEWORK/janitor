@@ -13,6 +13,7 @@ import software.spool.janitor.internal.control.EventsDTO;
 
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class PollingJanitorStrategy implements JanitorStrategy {
     private static final Logger LOG = LoggerFactory.getLogger(PollingJanitorStrategy.class);
@@ -28,16 +29,16 @@ public class PollingJanitorStrategy implements JanitorStrategy {
 
     @Override
     public void execute(CancellationToken token) {
-        List<EnvelopePersisted> persistedEnvelopes = new ArrayList<>();
-        List<EnvelopeQuarantined> quarantinedEnvelopes = new ArrayList<>();
+        Queue<EnvelopePersisted> persistedEnvelopes = new ConcurrentLinkedQueue<>();
+        Queue<EnvelopeQuarantined> quarantinedEnvelopes = new ConcurrentLinkedQueue<>();
         subscriber.subscribe(EnvelopePersisted.class, persistedEnvelopes::add);
         subscriber.subscribe (EnvelopeQuarantined.class, quarantinedEnvelopes::add);
         pollingConfiguration.scheduler().schedule(
                 () -> {
                     try {
                         LOG.info("Polling janitor strategy execution started");
-                        janitorScheduleHandler.handle(new EventsDTO(Collections.unmodifiableList(persistedEnvelopes),
-                                Collections.unmodifiableList(quarantinedEnvelopes)));
+                        janitorScheduleHandler.handle(new EventsDTO(Collections.unmodifiableCollection(persistedEnvelopes),
+                                Collections.unmodifiableCollection(quarantinedEnvelopes)));
                         persistedEnvelopes.clear();
                         quarantinedEnvelopes.clear();
                     } catch (Exception e) {
