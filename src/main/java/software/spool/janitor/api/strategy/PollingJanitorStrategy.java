@@ -37,10 +37,7 @@ public class PollingJanitorStrategy implements JanitorStrategy {
                 () -> {
                     try {
                         LOG.info("Polling janitor strategy execution started");
-                        janitorScheduleHandler.handle(new EventsDTO(Collections.unmodifiableCollection(persistedEnvelopes),
-                                Collections.unmodifiableCollection(quarantinedEnvelopes)));
-                        persistedEnvelopes.clear();
-                        quarantinedEnvelopes.clear();
+                        janitorScheduleHandler.handle(new EventsDTO(drain(persistedEnvelopes), drain(quarantinedEnvelopes)));
                     } catch (Exception e) {
                         LOG.error("Exception occurred while polling janitor strategy", e);
                     }
@@ -48,5 +45,15 @@ public class PollingJanitorStrategy implements JanitorStrategy {
                 pollingConfiguration.policy(),
                 token
         );
+    }
+
+    /**
+     * Takes every event received so far out of the queue. Events published from other threads, or while a
+     * cycle is being handled, stay in the queue for the next cycle instead of being lost.
+     */
+    private static <T> List<T> drain(Queue<T> queue) {
+        List<T> batch = new ArrayList<>();
+        for (T event; (event = queue.poll()) != null; ) batch.add(event);
+        return List.copyOf(batch);
     }
 }

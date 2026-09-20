@@ -3,6 +3,7 @@ package software.spool.janitor.api.strategy;
 import org.junit.jupiter.api.Test;
 import software.spool.core.model.Event;
 import software.spool.core.model.event.EnvelopePersisted;
+import software.spool.core.model.failure.EnvelopeQuarantined;
 import software.spool.core.model.vo.IdempotencyKey;
 import software.spool.core.model.vo.PartitionKey;
 import software.spool.core.port.bus.EventSubscriber;
@@ -40,6 +41,59 @@ class PollingJanitorStrategyTest {
         publishConcurrently(4, 5_000);
 
         assertThat(failures).isEmpty();
+    }
+
+    @Test
+    void execute_eventsBeforeCycle_areDeliveredOnceAndNotRepeated() {
+        start(dto -> {});
+
+        bus.emit(persisted("a"));
+        bus.emit(persisted("b"));
+        scheduler.runCycle();
+        scheduler.runCycle();
+
+        assertThat(cycles.get(0).persisted).containsExactly("a", "b");
+        assertThat(cycles.get(1).persisted).isEmpty();
+    }
+
+    @Test
+    void execute_persistedEventEmittedDuringCycle_isDeliveredInNextCycle() {
+        // While the janitor handles a cycle it republishes stuck envelopes, and the ingester
+        // answers with EnvelopePersisted in the same call. That event must not be lost.
+        start(dto -> {
+            if (cycles.size() == 1) bus.emit(persisted("during"));
+        });
+
+        scheduler.runCycle();
+        scheduler.runCycle();
+
+        assertThat(cycles.get(0).persisted).isEmpty();
+        assertThat(cycles.get(1).persisted).containsExactly("during");
+    }
+
+    @Test
+    void execute_quarantinedEventEmittedDuringCycle_isDeliveredInNextCycle() {
+        start(dto -> {
+            if (cycles.size() == 1) bus.emit(quarantined("during"));
+        });
+
+        scheduler.runCycle();
+        scheduler.runCycle();
+
+        assertThat(cycles.get(0).quarantined).isEmpty();
+        assertThat(cycles.get(1).quarantined).containsExactly("during");
+    }
+
+    @Test
+    void execute_concurrentPublishers_noEventIsLostOrDuplicated() throws Exception {
+        int publishers = 4;
+        int perPublisher = 5_000;
+        start(dto -> {});
+
+        publishConcurrently(publishers, perPublisher);
+
+        List<String> delivered = cycles.stream().flatMap(c -> c.persisted.stream()).toList();
+        assertThat(delivered).hasSize(publishers * perPublisher).doesNotHaveDuplicates();
     }
 
     private void start(Handler<EventsDTO> extra) {
@@ -90,12 +144,21 @@ class PollingJanitorStrategyTest {
                 .build();
     }
 
+    private static EnvelopeQuarantined quarantined(String key) {
+        return EnvelopeQuarantined.builder()
+                .idempotencyKey(IdempotencyKey.of(key))
+                .violations(List.of("violation"))
+                .build();
+    }
+
     /** What one cycle received, copied on the spot because the janitor may reuse its collections. */
     private static final class Cycle {
         final List<String> persisted;
+        final List<String> quarantined;
 
         Cycle(EventsDTO dto) {
             this.persisted = dto.envelopesPersisted().stream().map(e -> e.idempotencyKey().value()).toList();
+            this.quarantined = dto.envelopesQuarantined().stream().map(e -> e.idempotencyKey().value()).toList();
         }
     }
 
