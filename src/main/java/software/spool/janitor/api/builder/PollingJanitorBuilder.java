@@ -120,8 +120,13 @@ public class PollingJanitorBuilder {
                 .add(new ObservedStep<>("update-persisted", new UpdatePersistedEnvelopesStep(updater)))
                 .add(new ObservedStep<>("quarantine-envelopes", new QuarantineFailedEnvelopesStep(updater, recordsCleaned)))
                 .add(new ObservedStep<>("expired-envelopes",
-                        new RemoveExpiredEnvelopesStep(getErrorRouter(), Duration.ofMillis(millisecondsTtl), remover, reader, recordsCleaned)))
+                        new RemoveExpiredEnvelopesStep(getErrorRouter(), millis(millisecondsTtl), remover, reader, recordsCleaned)))
                 .add(new ObservedStep<>("handle-stuck-envelopes",
-                        new RepublishStuckEnvelopesStep(reader, updater, publisher, Duration.ofMillis(millisecondsThreshold), Objects.requireNonNullElse(maxRetries, 3))));
+                        new RepublishStuckEnvelopesStep(reader, updater, publisher, millis(millisecondsThreshold), Objects.requireNonNullElse(maxRetries, 3))));
+    }
+
+    /** A value that was not set stays null, and each step falls back to its own default. */
+    private static Duration millis(Integer value) {
+        return value == null ? null : Duration.ofMillis(value);
     }
 }
