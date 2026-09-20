@@ -58,8 +58,6 @@ class PollingJanitorStrategyTest {
 
     @Test
     void execute_persistedEventEmittedDuringCycle_isDeliveredInNextCycle() {
-        // While the janitor handles a cycle it republishes stuck envelopes, and the ingester
-        // answers with EnvelopePersisted in the same call. That event must not be lost.
         start(dto -> {
             if (cycles.size() == 1) bus.emit(persisted("during"));
         });
