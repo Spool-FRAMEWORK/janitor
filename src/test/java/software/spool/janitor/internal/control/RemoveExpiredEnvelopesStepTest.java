@@ -4,11 +4,13 @@ import org.junit.jupiter.api.Test;
 import software.spool.core.model.EnvelopeStatus;
 import software.spool.core.model.vo.*;
 import software.spool.core.pipeline.PipelineContext;
+import software.spool.core.port.inbox.InboxStatusQuery;
 import software.spool.core.utils.routing.ErrorRouter;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -47,6 +49,63 @@ class RemoveExpiredEnvelopesStepTest {
         step.apply(PipelineContext.empty());
 
         assertThat(removed).isEmpty();
+    }
+
+    @Test
+    void apply_asksTheInboxOnlyForWhatIsOldEnough() {
+        List<EnvelopeStatus> askedStatuses = new ArrayList<>();
+        List<Instant> askedLimits = new ArrayList<>();
+        List<IdempotencyKey> removed = new ArrayList<>();
+        Envelope expired = anyEnvelope(Instant.parse("2000-01-01T00:00:00Z"));
+        Instant before = Instant.now();
+        RemoveExpiredEnvelopesStep step = new RemoveExpiredEnvelopesStep(
+            new ErrorRouter(),
+            Duration.ofDays(1),
+            keys -> { removed.addAll(keys); return List.of(); },
+            inboxAnswering(askedStatuses, askedLimits, expired),
+            (value, attributes) -> {}
+        );
+
+        step.apply(PipelineContext.empty());
+        Instant after = Instant.now();
+
+        assertThat(askedStatuses).containsExactly(EnvelopeStatus.PERSISTED);
+        assertThat(askedLimits).singleElement().satisfies(limit ->
+            assertThat(limit).isBetween(before.minus(Duration.ofDays(1)), after.minus(Duration.ofDays(1))));
+        assertThat(removed).containsExactly(expired.idempotencyKey());
+    }
+
+    @Test
+    void apply_whatTheInboxReturns_isRemovedWithoutFilteringItAgain() {
+        List<IdempotencyKey> removed = new ArrayList<>();
+        Envelope answeredByTheInbox = anyEnvelope(Instant.now());
+        RemoveExpiredEnvelopesStep step = new RemoveExpiredEnvelopesStep(
+            new ErrorRouter(),
+            Duration.ofDays(365),
+            keys -> { removed.addAll(keys); return List.of(); },
+            inboxAnswering(new ArrayList<>(), new ArrayList<>(), answeredByTheInbox),
+            (value, attributes) -> {}
+        );
+
+        step.apply(PipelineContext.empty());
+
+        assertThat(removed).containsExactly(answeredByTheInbox.idempotencyKey());
+    }
+
+    private static InboxStatusQuery inboxAnswering(List<EnvelopeStatus> askedStatuses, List<Instant> askedLimits, Envelope answer) {
+        return new InboxStatusQuery() {
+            @Override
+            public Collection<Envelope> findByStatus(EnvelopeStatus status) {
+                throw new AssertionError("the whole folder must not be read");
+            }
+
+            @Override
+            public Collection<Envelope> findByStatusModifiedBefore(EnvelopeStatus status, Instant limit) {
+                askedStatuses.add(status);
+                askedLimits.add(limit);
+                return List.of(answer);
+            }
+        };
     }
 
     private static Envelope anyEnvelope(Instant updatedAt) {

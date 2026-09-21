@@ -34,8 +34,7 @@ public class RemoveExpiredEnvelopesStep implements Step<PipelineContext, Pipelin
     public PipelineContext apply(PipelineContext context) {
         try {
             long[] count = {0};
-            reader.findByStatus(EnvelopeStatus.PERSISTED).stream()
-                    .filter(e -> getLastModifiedInstant(e).isBefore(Instant.now().minus(ttl)))
+            reader.findByStatusModifiedBefore(EnvelopeStatus.PERSISTED, Instant.now().minus(ttl)).stream()
                     .map(Envelope::idempotencyKey)
                     .peek(k -> count[0]++)
                     .forEach(remover::remove);
@@ -47,9 +46,5 @@ public class RemoveExpiredEnvelopesStep implements Step<PipelineContext, Pipelin
             errorRouter.dispatch(e);
             throw e;
         }
-    }
-
-    private Instant getLastModifiedInstant(Envelope envelope) {
-        return Objects.isNull(envelope.updatedAt()) ? envelope.capturedAt() : envelope.updatedAt();
     }
 }

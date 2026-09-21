@@ -34,8 +34,7 @@ public class RepublishStuckEnvelopesStep implements Step<PipelineContext, Pipeli
 
     @Override
     public PipelineContext apply(PipelineContext context) {
-        reader.findByStatus(EnvelopeStatus.CAPTURED).stream()
-                .filter(e -> getLastModifiedInstant(e).isBefore(Instant.now().minus(threshold)))
+        reader.findByStatusModifiedBefore(EnvelopeStatus.CAPTURED, Instant.now().minus(threshold)).stream()
                 .map(Envelope::retry)
                 .forEach(this::handleRetry);
         return context;
@@ -50,10 +49,6 @@ public class RepublishStuckEnvelopesStep implements Step<PipelineContext, Pipeli
             LOG.warn("Republished Envelope {} | current attempt: {}", envelope, envelope.retries());
             publisher.publish(buildEventFrom(envelope));
         }
-    }
-
-    private Instant getLastModifiedInstant(Envelope envelope) {
-        return Objects.isNull(envelope.updatedAt()) ? envelope.capturedAt() : envelope.updatedAt();
     }
 
     private EnvelopeStored buildEventFrom(Envelope envelope) {
