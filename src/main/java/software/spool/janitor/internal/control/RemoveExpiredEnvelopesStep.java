@@ -21,25 +21,33 @@ public class RemoveExpiredEnvelopesStep implements Step<PipelineContext, Pipelin
     private final InboxEnvelopeRemover remover;
     private final InboxStatusQuery reader;
     private final MetricsRegistry.CounterMetric recordsCleaned;
+    private final EnvelopeStatus status;
+    private final String reason;
 
     public RemoveExpiredEnvelopesStep(ErrorRouter errorRouter, Duration ttl, InboxEnvelopeRemover remover, InboxStatusQuery reader, MetricsRegistry.CounterMetric recordsCleaned) {
+        this(errorRouter, ttl, remover, reader, recordsCleaned, EnvelopeStatus.PERSISTED, "expired");
+    }
+
+    public RemoveExpiredEnvelopesStep(ErrorRouter errorRouter, Duration ttl, InboxEnvelopeRemover remover, InboxStatusQuery reader, MetricsRegistry.CounterMetric recordsCleaned, EnvelopeStatus status, String reason) {
         this.errorRouter = errorRouter;
         this.ttl = Objects.requireNonNullElse(ttl, Duration.ofDays(1));
         this.remover = remover;
         this.reader = reader;
         this.recordsCleaned = recordsCleaned;
+        this.status = status;
+        this.reason = reason;
     }
 
     @Override
     public PipelineContext apply(PipelineContext context) {
         try {
             long[] count = {0};
-            reader.findByStatusModifiedBefore(EnvelopeStatus.PERSISTED, Instant.now().minus(ttl)).stream()
+            reader.findByStatusModifiedBefore(status, Instant.now().minus(ttl)).stream()
                     .map(Envelope::idempotencyKey)
                     .peek(k -> count[0]++)
                     .forEach(remover::remove);
             if (count[0] > 0) {
-                recordsCleaned.add(count[0], Map.of(SpoolMetrics.Attributes.REASON, "expired"));
+                recordsCleaned.add(count[0], Map.of(SpoolMetrics.Attributes.REASON, reason));
             }
             return context;
         } catch (Exception e) {

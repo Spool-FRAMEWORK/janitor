@@ -1,5 +1,6 @@
 package software.spool.janitor.api.builder;
 
+import software.spool.core.model.EnvelopeStatus;
 import software.spool.core.pipeline.ObservedStep;
 import software.spool.core.pipeline.Pipeline;
 import software.spool.core.pipeline.PipelineContext;
@@ -38,6 +39,7 @@ public class PollingJanitorBuilder {
     private ErrorRouter errorRouter;
     private Integer millisecondsThreshold;
     private Integer millisecondsTtl;
+    private Integer millisecondsQuarantineTtl;
     private Integer maxRetries;
     private final MetricsRegistry metricsRegistry = new OpenTelemetryMetricsRegistry();
 
@@ -90,6 +92,20 @@ public class PollingJanitorBuilder {
         return this;
     }
 
+    /**
+     * Sets how long an envelope stays in quarantine before the janitor deletes it.
+     *
+     * <p>Without a value nothing removes what is quarantined. Deleting is final, so it is best left unset until
+     * someone has decided what should happen to those envelopes.</p>
+     *
+     * @param millisecondsQuarantineTtl the time in quarantine after which an envelope is deleted, or {@code null} to keep them
+     * @return this builder
+     */
+    public PollingJanitorBuilder withMillisecondsQuarantineTtl(Integer millisecondsQuarantineTtl) {
+        this.millisecondsQuarantineTtl = millisecondsQuarantineTtl;
+        return this;
+    }
+
     public PollingJanitorBuilder withMaxRetries(Integer maxRetries) {
         this.maxRetries = maxRetries;
         return this;
@@ -115,12 +131,17 @@ public class PollingJanitorBuilder {
         return new JanitorScheduleHandler(initializePipeline(recordsCleaned), getErrorRouter(), cyclesCompleted, cyclesFailed, cycleDuration);
     }
 
-    private Pipeline<PipelineContext, PipelineContext> initializePipeline(MetricsRegistry.CounterMetric recordsCleaned) {
-        return Pipeline.<PipelineContext>start()
+    Pipeline<PipelineContext, PipelineContext> initializePipeline(MetricsRegistry.CounterMetric recordsCleaned) {
+        Pipeline<PipelineContext, PipelineContext> expiry = Pipeline.<PipelineContext>start()
                 .add(new ObservedStep<>("update-persisted", new UpdatePersistedEnvelopesStep(updater)))
                 .add(new ObservedStep<>("quarantine-envelopes", new QuarantineFailedEnvelopesStep(updater, recordsCleaned)))
                 .add(new ObservedStep<>("expired-envelopes",
-                        new RemoveExpiredEnvelopesStep(getErrorRouter(), millis(millisecondsTtl), remover, reader, recordsCleaned)))
+                        new RemoveExpiredEnvelopesStep(getErrorRouter(), millis(millisecondsTtl), remover, reader, recordsCleaned)));
+        Pipeline<PipelineContext, PipelineContext> withQuarantineExpiry = millisecondsQuarantineTtl == null ? expiry : expiry
+                .add(new ObservedStep<>("expired-quarantine",
+                        new RemoveExpiredEnvelopesStep(getErrorRouter(), millis(millisecondsQuarantineTtl), remover, reader, recordsCleaned,
+                                EnvelopeStatus.QUARANTINED, "quarantine_expired")));
+        return withQuarantineExpiry
                 .add(new ObservedStep<>("handle-stuck-envelopes",
                         new RepublishStuckEnvelopesStep(reader, updater, publisher, millis(millisecondsThreshold), Objects.requireNonNullElse(maxRetries, 3), recordsCleaned)));
     }

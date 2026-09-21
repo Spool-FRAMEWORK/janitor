@@ -5,13 +5,16 @@ import software.spool.core.model.EnvelopeStatus;
 import software.spool.core.model.vo.*;
 import software.spool.core.pipeline.PipelineContext;
 import software.spool.core.port.inbox.InboxStatusQuery;
+import software.spool.core.port.metrics.SpoolMetrics;
 import software.spool.core.utils.routing.ErrorRouter;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -90,6 +93,61 @@ class RemoveExpiredEnvelopesStepTest {
         step.apply(PipelineContext.empty());
 
         assertThat(removed).containsExactly(answeredByTheInbox.idempotencyKey());
+    }
+
+    @Test
+    void apply_forQuarantinedEnvelopes_asksForThatStatusAndCountsWithItsOwnReason() {
+        List<EnvelopeStatus> askedStatuses = new ArrayList<>();
+        Map<String, Long> countedByReason = new HashMap<>();
+        Envelope quarantined = anyEnvelope(Instant.parse("2000-01-01T00:00:00Z"));
+        RemoveExpiredEnvelopesStep step = new RemoveExpiredEnvelopesStep(
+            new ErrorRouter(),
+            Duration.ofDays(1),
+            keys -> List.of(),
+            inboxAnswering(askedStatuses, new ArrayList<>(), quarantined),
+            (value, attributes) -> countedByReason.merge(attributes.get(SpoolMetrics.Attributes.REASON), value, Long::sum),
+            EnvelopeStatus.QUARANTINED,
+            "quarantine_expired"
+        );
+
+        step.apply(PipelineContext.empty());
+
+        assertThat(askedStatuses).containsExactly(EnvelopeStatus.QUARANTINED);
+        assertThat(countedByReason).containsOnly(Map.entry("quarantine_expired", 1L));
+    }
+
+    @Test
+    void apply_persistedEnvelopes_stillCountWithTheReasonExpired() {
+        Map<String, Long> countedByReason = new HashMap<>();
+        RemoveExpiredEnvelopesStep step = new RemoveExpiredEnvelopesStep(
+            new ErrorRouter(),
+            Duration.ofDays(1),
+            keys -> List.of(),
+            inboxAnswering(new ArrayList<>(), new ArrayList<>(), anyEnvelope(Instant.parse("2000-01-01T00:00:00Z"))),
+            (value, attributes) -> countedByReason.merge(attributes.get(SpoolMetrics.Attributes.REASON), value, Long::sum)
+        );
+
+        step.apply(PipelineContext.empty());
+
+        assertThat(countedByReason).containsOnly(Map.entry("expired", 1L));
+    }
+
+    @Test
+    void apply_nothingOldEnough_countsNothing() {
+        Map<String, Long> countedByReason = new HashMap<>();
+        RemoveExpiredEnvelopesStep step = new RemoveExpiredEnvelopesStep(
+            new ErrorRouter(),
+            Duration.ofDays(1),
+            keys -> List.of(),
+            status -> List.of(),
+            (value, attributes) -> countedByReason.merge(attributes.get(SpoolMetrics.Attributes.REASON), value, Long::sum),
+            EnvelopeStatus.QUARANTINED,
+            "quarantine_expired"
+        );
+
+        step.apply(PipelineContext.empty());
+
+        assertThat(countedByReason).isEmpty();
     }
 
     private static InboxStatusQuery inboxAnswering(List<EnvelopeStatus> askedStatuses, List<Instant> askedLimits, Envelope answer) {
