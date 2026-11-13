@@ -120,7 +120,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "spool-prometheus" },
-          "expr": "sum(spool_ingester_records_rejected_total{service_name=~\"$node\"})\nor vector(0)",
+          "expr": "sum(spool_records_rejected_total{module=\"ingester\", service_name=~\"$node\"})\nor vector(0)",
           "legendFormat": "",
           "refId": "A"
         }
@@ -162,7 +162,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "spool-prometheus" },
-          "expr": "100 *\n(\n  sum(spool_ingester_records_rejected_total{service_name=~\"$node\"})\n  or vector(0)\n)\n/\nclamp_min(\n  (\n    sum(spool_ingester_records_total{service_name=~\"$node\"})\n    or vector(0)\n  )\n  +\n  (\n    sum(spool_ingester_records_rejected_total{service_name=~\"$node\"})\n    or vector(0)\n  ),\n  1e-9\n)",
+          "expr": "100 *\n(\n  sum(spool_records_rejected_total{module=\"ingester\", service_name=~\"$node\"})\n  or vector(0)\n)\n/\nclamp_min(\n  (\n    sum(spool_ingester_records_total{service_name=~\"$node\"})\n    or vector(0)\n  )\n  +\n  (\n    sum(spool_records_rejected_total{module=\"ingester\", service_name=~\"$node\"})\n    or vector(0)\n  ),\n  1e-9\n)",
           "legendFormat": "",
           "refId": "A"
         }
@@ -225,7 +225,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "spool-prometheus" },
-          "expr": "sum by (service_name, reason) (rate(spool_ingester_records_rejected_total{service_name=~\"$node\"}[1m]))",
+          "expr": "sum by (service_name, reason) (rate(spool_records_rejected_total{module=\"ingester\", service_name=~\"$node\"}[1m]))",
           "legendFormat": "{{service_name}} / {{reason}}",
           "refId": "A"
         }
