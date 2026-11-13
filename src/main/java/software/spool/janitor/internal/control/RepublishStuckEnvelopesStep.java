@@ -3,6 +3,8 @@ package software.spool.janitor.internal.control;
 import software.spool.core.adapter.logging.LoggerFactory;
 import software.spool.core.model.EnvelopeStatus;
 import software.spool.core.model.event.EnvelopeStored;
+import software.spool.core.model.failure.EnvelopeQuarantined;
+import software.spool.core.model.quarantine.QuarantineReason;
 import software.spool.core.model.vo.Envelope;
 import software.spool.core.model.vo.EventMetadataKey;
 import software.spool.core.pipeline.PipelineContext;
@@ -47,8 +49,12 @@ public class RepublishStuckEnvelopesStep implements Step<PipelineContext, Pipeli
 
     private void handleRetry(Envelope envelope) {
         if (envelope.retries() >= maxRetries) {
-            updater.update(envelope.idempotencyKey(), EnvelopeStatus.QUARANTINED);
-            LOG.error("Quarantined Envelope {} after {} attempts", envelope, envelope.retries());
+            publisher.publish(EnvelopeQuarantined.builder()
+                    .correlationId(envelope.metadata().get(EventMetadataKey.CORRELATION_ID))
+                    .idempotencyKey(envelope.idempotencyKey())
+                    .reason(QuarantineReason.RETRIES_EXHAUSTED)
+                    .build());
+            LOG.error("Sent Envelope {} to quarantine after {} attempts", envelope, envelope.retries());
             recordsCleaned.add(1, Map.of(SpoolMetrics.Attributes.REASON, "retries_exhausted"));
         } else {
             updater.update(envelope);

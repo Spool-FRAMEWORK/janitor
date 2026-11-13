@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import software.spool.core.model.Event;
 import software.spool.core.model.event.EnvelopePersisted;
 import software.spool.core.model.failure.EnvelopeQuarantined;
+import software.spool.core.model.quarantine.QuarantineReason;
 import software.spool.core.model.vo.IdempotencyKey;
 import software.spool.core.model.vo.PartitionKey;
 import software.spool.core.port.bus.EventSubscriber;
@@ -145,6 +146,7 @@ class PollingJanitorStrategyTest {
     private static EnvelopeQuarantined quarantined(String key) {
         return EnvelopeQuarantined.builder()
                 .idempotencyKey(IdempotencyKey.of(key))
+                .reason(QuarantineReason.VALIDATION_FAILED)
                 .violations(List.of("violation"))
                 .build();
     }

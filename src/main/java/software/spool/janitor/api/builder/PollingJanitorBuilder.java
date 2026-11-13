@@ -1,6 +1,5 @@
 package software.spool.janitor.api.builder;
 
-import software.spool.core.model.EnvelopeStatus;
 import software.spool.core.pipeline.ObservedStep;
 import software.spool.core.pipeline.Pipeline;
 import software.spool.core.pipeline.PipelineContext;
@@ -13,6 +12,7 @@ import software.spool.core.port.decorator.SafeInboxUpdater;
 import software.spool.core.port.inbox.InboxEnvelopeRemover;
 import software.spool.core.port.inbox.InboxStatusQuery;
 import software.spool.core.port.inbox.InboxUpdater;
+import software.spool.core.port.quarantine.QuarantineRepository;
 import software.spool.core.adapter.otel.OpenTelemetryMetricsRegistry;
 import software.spool.core.port.metrics.MetricsRegistry;
 import software.spool.core.port.metrics.SpoolMetrics;
@@ -20,6 +20,7 @@ import software.spool.core.port.watchdog.ModuleHeartBeat;
 import software.spool.core.utils.polling.PollingConfiguration;
 import software.spool.core.utils.routing.ErrorRouter;
 import software.spool.janitor.api.Janitor;
+import software.spool.janitor.api.quarantine.QuarantinedEnvelopes;
 import software.spool.janitor.api.strategy.PollingJanitorStrategy;
 import software.spool.janitor.api.utils.JanitorErrorRouter;
 import software.spool.janitor.internal.control.*;
@@ -33,6 +34,7 @@ public class PollingJanitorBuilder {
     private InboxStatusQuery reader;
     private InboxUpdater updater;
     private InboxEnvelopeRemover remover;
+    private QuarantineRepository quarantineRepository;
     private EventPublisher publisher;
     private EventSubscriber subscriber;
     private PollingConfiguration pollingConfiguration;
@@ -59,6 +61,17 @@ public class PollingJanitorBuilder {
 
     public PollingJanitorBuilder removeWith(InboxEnvelopeRemover remover) {
         this.remover = remover;
+        return this;
+    }
+
+    /**
+     * Sets where the janitor keeps the record of each envelope it sends to quarantine. Required.
+     *
+     * @param quarantineRepository the quarantine records
+     * @return this builder
+     */
+    public PollingJanitorBuilder quarantineIn(QuarantineRepository quarantineRepository) {
+        this.quarantineRepository = quarantineRepository;
         return this;
     }
 
@@ -93,9 +106,9 @@ public class PollingJanitorBuilder {
     }
 
     /**
-     * Sets how long an envelope stays in quarantine before the janitor deletes it.
+     * Sets how long an envelope stays in quarantine before the janitor purges it, together with its record.
      *
-     * <p>Without a value nothing removes what is quarantined. Deleting is final, so it is best left unset until
+     * <p>Without a value nothing removes what is quarantined. Purging is final, so it is best left unset until
      * someone has decided what should happen to those envelopes.</p>
      *
      * @param millisecondsQuarantineTtl the time in quarantine after which an envelope is deleted, or {@code null} to keep them
@@ -112,6 +125,7 @@ public class PollingJanitorBuilder {
     }
 
     public Janitor create() {
+        Objects.requireNonNull(quarantineRepository, "QuarantineRepository required");
         return new Janitor(initializeStrategy(), getErrorRouter(), heartBeat);
     }
 
@@ -134,13 +148,13 @@ public class PollingJanitorBuilder {
     Pipeline<PipelineContext, PipelineContext> initializePipeline(MetricsRegistry.CounterMetric recordsCleaned) {
         Pipeline<PipelineContext, PipelineContext> expiry = Pipeline.<PipelineContext>start()
                 .add(new ObservedStep<>("update-persisted", new UpdatePersistedEnvelopesStep(updater)))
-                .add(new ObservedStep<>("quarantine-envelopes", new QuarantineFailedEnvelopesStep(updater, recordsCleaned)))
+                .add(new ObservedStep<>("quarantine-envelopes", new QuarantineFailedEnvelopesStep(updater, quarantineRepository, recordsCleaned)))
                 .add(new ObservedStep<>("expired-envelopes",
                         new RemoveExpiredEnvelopesStep(getErrorRouter(), millis(millisecondsTtl), remover, reader, recordsCleaned)));
         Pipeline<PipelineContext, PipelineContext> withQuarantineExpiry = millisecondsQuarantineTtl == null ? expiry : expiry
                 .add(new ObservedStep<>("expired-quarantine",
-                        new RemoveExpiredEnvelopesStep(getErrorRouter(), millis(millisecondsQuarantineTtl), remover, reader, recordsCleaned,
-                                EnvelopeStatus.QUARANTINED, "quarantine_expired")));
+                        new PurgeExpiredQuarantineStep(getErrorRouter(), millis(millisecondsQuarantineTtl), reader,
+                                QuarantinedEnvelopes.of(reader, updater, remover, quarantineRepository, publisher), recordsCleaned)));
         return withQuarantineExpiry
                 .add(new ObservedStep<>("handle-stuck-envelopes",
                         new RepublishStuckEnvelopesStep(reader, updater, publisher, millis(millisecondsThreshold), Objects.requireNonNullElse(maxRetries, 3), recordsCleaned)));

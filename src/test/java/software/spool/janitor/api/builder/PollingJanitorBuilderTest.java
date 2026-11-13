@@ -1,7 +1,12 @@
 package software.spool.janitor.api.builder;
 
 import org.junit.jupiter.api.Test;
+import software.spool.core.adapter.memory.InMemoryQuarantineRepository;
 import software.spool.core.model.EnvelopeStatus;
+import software.spool.core.model.Event;
+import software.spool.core.model.event.EnvelopePurged;
+import software.spool.core.model.quarantine.QuarantineReason;
+import software.spool.core.model.quarantine.QuarantinedRecord;
 import software.spool.core.model.vo.Envelope;
 import software.spool.core.model.vo.EventMetadata;
 import software.spool.core.model.vo.IdempotencyKey;
@@ -23,6 +28,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 class PollingJanitorBuilderTest {
@@ -51,6 +57,44 @@ class PollingJanitorBuilderTest {
     @Test
     void create_withAQuarantineTtl_works() {
         assertThatCode(() -> builder().withMillisecondsQuarantineTtl(604_800_000).create()).doesNotThrowAnyException();
+    }
+
+    @Test
+    void create_withoutQuarantineRepository_failsWithAClearMessage() {
+        PollingJanitorBuilder builder = JanitorBuilderFactory.watchdog(null, "janitor-test")
+                .polling()
+                .from(status -> List.of())
+                .with(mock(InboxUpdater.class))
+                .removeWith(mock(InboxEnvelopeRemover.class))
+                .on(mock(EventPublisher.class))
+                .subscribeWith(mock(EventSubscriber.class))
+                .every(Duration.ofSeconds(1));
+
+        assertThatThrownBy(builder::create)
+                .isInstanceOf(NullPointerException.class)
+                .hasMessage("QuarantineRepository required");
+    }
+
+    @Test
+    void pipeline_withAQuarantineTtl_purgesTheEnvelopeAndItsRecord() {
+        InMemoryQuarantineRepository repository = new InMemoryQuarantineRepository();
+        Envelope quarantinedEnvelope = envelope("quarantined");
+        repository.save(new QuarantinedRecord(quarantinedEnvelope, QuarantineReason.RETRIES_EXHAUSTED, List.of(), Instant.now()));
+        List<Event> published = new ArrayList<>();
+        PollingJanitorBuilder builder = builder(inboxHolding(EnvelopeStatus.QUARANTINED, quarantinedEnvelope, new ArrayList<>(), new ArrayList<>()))
+                .quarantineIn(repository)
+                .on(new EventPublisher() {
+                    @Override
+                    public <E extends Event> void publish(E event) {
+                        published.add(event);
+                    }
+                })
+                .withMillisecondsQuarantineTtl(3_600_000);
+
+        builder.initializePipeline((value, attributes) -> {}).execute(emptyCycle());
+
+        assertThat(repository.findAll()).isEmpty();
+        assertThat(published).filteredOn(EnvelopePurged.class::isInstance).hasSize(1);
     }
 
     @Test
@@ -98,7 +142,7 @@ class PollingJanitorBuilderTest {
         return new InboxStatusQuery() {
             @Override
             public Collection<Envelope> findByStatus(EnvelopeStatus asked) {
-                return List.of();
+                return asked == status ? List.of(held) : List.of();
             }
 
             @Override
@@ -127,6 +171,7 @@ class PollingJanitorBuilderTest {
                 .removeWith(mock(InboxEnvelopeRemover.class))
                 .on(mock(EventPublisher.class))
                 .subscribeWith(mock(EventSubscriber.class))
+                .quarantineIn(new InMemoryQuarantineRepository())
                 .every(Duration.ofSeconds(1));
     }
 }

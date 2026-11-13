@@ -2,6 +2,8 @@ package software.spool.janitor.internal.control;
 
 import org.junit.jupiter.api.Test;
 import software.spool.core.model.EnvelopeStatus;
+import software.spool.core.model.failure.EnvelopeQuarantined;
+import software.spool.core.model.quarantine.QuarantineReason;
 import software.spool.core.model.Event;
 import software.spool.core.model.vo.*;
 import software.spool.core.pipeline.PipelineContext;
@@ -42,13 +44,13 @@ class RepublishStuckEnvelopesStepTest {
     }
 
     @Test
-    void apply_maxRetriesReached_quarantinesInstead() {
+    void apply_maxRetriesReached_publishesEnvelopeQuarantinedWithoutTouchingTheInbox() {
         List<Event> published = new ArrayList<>();
-        List<IdempotencyKey> quarantined = new ArrayList<>();
+        List<EnvelopeStatus> updatedTo = new ArrayList<>();
         Envelope stuck = anyEnvelope(3, Instant.parse("2000-01-01T00:00:00Z"));
         RepublishStuckEnvelopesStep step = new RepublishStuckEnvelopesStep(
             status -> List.of(stuck),
-            (keys, status) -> { if (status == EnvelopeStatus.QUARANTINED) quarantined.addAll(keys); return List.of(); },
+            (keys, status) -> { updatedTo.add(status); return List.of(); },
             new EventPublisher() {
                 @Override public <E extends Event> void publish(E event) { published.add(event); }
             },
@@ -59,8 +61,12 @@ class RepublishStuckEnvelopesStepTest {
 
         step.apply(PipelineContext.empty());
 
-        assertThat(published).isEmpty();
-        assertThat(quarantined).hasSize(1);
+        assertThat(updatedTo).isEmpty();
+        assertThat(published).singleElement().isInstanceOfSatisfying(EnvelopeQuarantined.class, event -> {
+            assertThat(event.idempotencyKey()).isEqualTo(stuck.idempotencyKey());
+            assertThat(event.reason()).isEqualTo(QuarantineReason.RETRIES_EXHAUSTED);
+            assertThat(event.violations()).isEmpty();
+        });
     }
 
     @Test
