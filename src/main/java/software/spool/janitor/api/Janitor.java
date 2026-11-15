@@ -1,5 +1,7 @@
 package software.spool.janitor.api;
 
+import software.spool.janitor.api.quarantine.QuarantinedEnvelopes;
+
 import software.spool.core.model.spool.SpoolModule;
 import software.spool.core.model.spool.SpoolNode;
 import software.spool.core.port.health.ModuleHealthPayload;
@@ -45,6 +47,7 @@ public class Janitor implements SpoolModule {
     private CancellationToken token;
     private final ErrorRouter errorRouter;
     private final ModuleHeartBeat heartBeat;
+    private final QuarantinedEnvelopes quarantinedEnvelopes;
 
     /**
      * Creates a new {@code Feeder} with the given strategy and error router.
@@ -52,11 +55,14 @@ public class Janitor implements SpoolModule {
      * @param strategy    the publishing strategy to use; must not be {@code null}
      * @param errorRouter the error router for handling exceptions; must not be
      *                    {@code null}
+     * @param quarantinedEnvelopes what is in quarantine and how to resolve it
      */
-    public Janitor(JanitorStrategy strategy, ErrorRouter errorRouter, ModuleHeartBeat heartBeat) {
+    public Janitor(JanitorStrategy strategy, ErrorRouter errorRouter, ModuleHeartBeat heartBeat,
+                   QuarantinedEnvelopes quarantinedEnvelopes) {
         this.strategy = Objects.requireNonNull(strategy);
         this.errorRouter = Objects.requireNonNull(errorRouter);
         this.heartBeat = heartBeat;
+        this.quarantinedEnvelopes = Objects.requireNonNull(quarantinedEnvelopes);
         this.token  = CancellationToken.NOOP;
     }
 
@@ -108,5 +114,12 @@ public class Janitor implements SpoolModule {
     @Override
     public ModuleHealthPayload checkHealth() {
         return token.isActive() ? ModuleHealthPayload.healthy(heartBeat.identity().moduleId()) : ModuleHealthPayload.degraded(heartBeat.identity().moduleId(), null);
+    }
+
+    /**
+     * What is in quarantine, to republish, correct or purge it.
+     */
+    public QuarantinedEnvelopes quarantinedEnvelopes() {
+        return quarantinedEnvelopes;
     }
 }

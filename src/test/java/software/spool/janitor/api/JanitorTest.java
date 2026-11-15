@@ -2,11 +2,15 @@ package software.spool.janitor.api;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import software.spool.core.adapter.memory.InMemoryQuarantineRepository;
 import software.spool.core.model.spool.SpoolNode;
+import software.spool.core.port.bus.EventPublisher;
 import software.spool.core.port.health.HealthStatus;
 import software.spool.core.port.watchdog.ModuleHeartBeat;
 import software.spool.core.utils.routing.ErrorRouter;
 import software.spool.janitor.api.fixture.CapturingJanitorStrategy;
+import software.spool.janitor.api.fixture.FakeInbox;
+import software.spool.janitor.api.quarantine.QuarantinedEnvelopes;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -20,7 +24,8 @@ class JanitorTest {
     @BeforeEach
     void setUp() {
         strategy = new CapturingJanitorStrategy();
-        janitor = new Janitor(strategy, new ErrorRouter(), ModuleHeartBeat.NOOP);
+        janitor = new Janitor(strategy, new ErrorRouter(), ModuleHeartBeat.NOOP, QuarantinedEnvelopes.of(new FakeInbox(), new FakeInbox(),
+                new InMemoryQuarantineRepository(), mock(EventPublisher.class)));
         permit = mock(SpoolNode.StartPermit.class);
     }
 

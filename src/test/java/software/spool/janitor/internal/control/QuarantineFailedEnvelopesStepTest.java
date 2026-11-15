@@ -13,6 +13,7 @@ import software.spool.core.model.vo.Envelope;
 import software.spool.core.model.vo.EventMetadata;
 import software.spool.core.model.vo.IdempotencyKey;
 import software.spool.core.model.vo.MediaType;
+import software.spool.core.model.vo.PartitionKey;
 import software.spool.core.pipeline.PipelineContext;
 import software.spool.janitor.api.fixture.FakeInbox;
 
@@ -73,6 +74,19 @@ class QuarantineFailedEnvelopesStepTest {
         assertThat(reopened.status()).isEqualTo(QuarantineStatus.PENDING);
         assertThat(reopened.reason()).isEqualTo(QuarantineReason.RETRIES_EXHAUSTED);
         assertThat(reopened.history()).hasSize(2);
+    }
+
+    @Test
+    void apply_rejectionThatStayedInBronze_leavesTheInboxAndTheQuarantineAlone() throws AttributeNotFoundException {
+        Envelope persisted = capturedEnvelope().withStatus(EnvelopeStatus.PERSISTED);
+        inbox.with(persisted);
+        PartitionKey partition = PartitionKey.ofEntriesWithoutDate().with("source", "boe").build();
+
+        step.apply(cycleWith(EnvelopeQuarantined.builder().idempotencyKey(KEY).reason(QuarantineReason.VALIDATION_FAILED)
+                .location(QuarantineLocation.bronze(partition)).build()));
+
+        assertThat(inbox.stored("k1")).contains(persisted);
+        assertThat(repository.findAll()).isEmpty();
     }
 
     @Test

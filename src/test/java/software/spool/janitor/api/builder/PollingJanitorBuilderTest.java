@@ -1,6 +1,7 @@
 package software.spool.janitor.api.builder;
 
 import org.junit.jupiter.api.Test;
+import software.spool.core.adapter.memory.InMemoryBronzeRepository;
 import software.spool.core.adapter.memory.InMemoryQuarantineRepository;
 import software.spool.core.model.EnvelopeStatus;
 import software.spool.core.model.Event;
@@ -14,6 +15,7 @@ import software.spool.core.model.vo.Envelope;
 import software.spool.core.model.vo.EventMetadata;
 import software.spool.core.model.vo.IdempotencyKey;
 import software.spool.core.model.vo.MediaType;
+import software.spool.core.model.vo.PartitionKey;
 import software.spool.core.pipeline.PipelineContext;
 import software.spool.core.pipeline.Result;
 import software.spool.core.port.bus.EventPublisher;
@@ -21,6 +23,7 @@ import software.spool.core.port.bus.EventSubscriber;
 import software.spool.core.port.inbox.InboxEnvelopeRemover;
 import software.spool.core.port.inbox.InboxStatusQuery;
 import software.spool.core.port.inbox.InboxUpdater;
+import software.spool.janitor.api.Janitor;
 import software.spool.janitor.internal.control.JanitorScheduleKeys;
 
 import java.time.Duration;
@@ -165,6 +168,21 @@ class PollingJanitorBuilderTest {
         assertThat(result).isInstanceOf(Result.Ok.class);
         assertThat(askedStatuses).doesNotContain(EnvelopeStatus.QUARANTINED);
         assertThat(removed).isEmpty();
+    }
+
+    @Test
+    void create_withABronzeRepository_givesQuarantinedEnvelopesThatRewriteBronze() {
+        InMemoryQuarantineRepository repository = new InMemoryQuarantineRepository();
+        InMemoryBronzeRepository bronze = new InMemoryBronzeRepository();
+        PartitionKey partition = PartitionKey.ofEntriesWithoutDate().with("source", "boe").build();
+        Envelope persisted = envelope("rejected-by-the-mounter");
+        repository.save(QuarantinedRecord.pending(persisted, QuarantineLocation.bronze(partition), QuarantineReason.VALIDATION_FAILED,
+                List.of(), Instant.now()));
+
+        Janitor janitor = builder().quarantineIn(repository).rewriteBronzeIn(bronze).create();
+
+        assertThat(janitor.quarantinedEnvelopes().republish(List.of(persisted.idempotencyKey()))).containsExactly(persisted.idempotencyKey());
+        assertThat(bronze.find(partition, persisted.idempotencyKey())).isPresent();
     }
 
     private static PipelineContext emptyCycle() {

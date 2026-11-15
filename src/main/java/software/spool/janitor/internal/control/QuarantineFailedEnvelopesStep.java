@@ -39,6 +39,7 @@ public class QuarantineFailedEnvelopesStep implements Step<PipelineContext, Pipe
         Collection<EnvelopeQuarantined> events = context.require(JanitorScheduleKeys.ENVELOPES_QUARANTINED);
         if (events.isEmpty()) return context;
         Map<IdempotencyKey, EnvelopeQuarantined> lastEventByKey = events.stream()
+                .filter(event -> event.location() instanceof QuarantineLocation.Inbox)
                 .collect(Collectors.toMap(EnvelopeQuarantined::idempotencyKey, Function.identity(), (first, last) -> last));
         Collection<Envelope> quarantined = updater.update(lastEventByKey.keySet(), EnvelopeStatus.QUARANTINED);
         Instant quarantinedAt = Instant.now();
