@@ -20,7 +20,6 @@ import software.spool.core.port.watchdog.ModuleHeartBeat;
 import software.spool.core.utils.polling.PollingConfiguration;
 import software.spool.core.utils.routing.ErrorRouter;
 import software.spool.janitor.api.Janitor;
-import software.spool.janitor.api.quarantine.QuarantinedEnvelopes;
 import software.spool.janitor.api.strategy.PollingJanitorStrategy;
 import software.spool.janitor.api.utils.JanitorErrorRouter;
 import software.spool.janitor.internal.control.*;
@@ -42,6 +41,7 @@ public class PollingJanitorBuilder {
     private Integer millisecondsThreshold;
     private Integer millisecondsTtl;
     private Integer millisecondsQuarantineTtl;
+    private Long millisecondsQuarantineRetention;
     private Integer maxRetries;
     private final MetricsRegistry metricsRegistry = new OpenTelemetryMetricsRegistry();
 
@@ -106,16 +106,30 @@ public class PollingJanitorBuilder {
     }
 
     /**
-     * Sets how long an envelope stays in quarantine before the janitor purges it, together with its record.
+     * Sets how long an envelope stays in quarantine in the inbox before the janitor removes it from there. Its
+     * quarantine record stays pending, so it can still be resolved.
      *
-     * <p>Without a value nothing removes what is quarantined. Purging is final, so it is best left unset until
-     * someone has decided what should happen to those envelopes.</p>
+     * <p>Without a value the inbox keeps every quarantined envelope.</p>
      *
-     * @param millisecondsQuarantineTtl the time in quarantine after which an envelope is deleted, or {@code null} to keep them
+     * @param millisecondsQuarantineTtl the time in quarantine after which an envelope leaves the inbox, or {@code null} to keep them
      * @return this builder
      */
     public PollingJanitorBuilder withMillisecondsQuarantineTtl(Integer millisecondsQuarantineTtl) {
         this.millisecondsQuarantineTtl = millisecondsQuarantineTtl;
+        return this;
+    }
+
+    /**
+     * Sets how long a resolved quarantine record is kept before the janitor deletes it. Pending records are never
+     * deleted.
+     *
+     * <p>Without a value every resolved record is kept.</p>
+     *
+     * @param millisecondsQuarantineRetention the time since a record was resolved after which it is deleted, or {@code null} to keep them
+     * @return this builder
+     */
+    public PollingJanitorBuilder withMillisecondsQuarantineRetention(Long millisecondsQuarantineRetention) {
+        this.millisecondsQuarantineRetention = millisecondsQuarantineRetention;
         return this;
     }
 
@@ -153,9 +167,12 @@ public class PollingJanitorBuilder {
                         new RemoveExpiredEnvelopesStep(getErrorRouter(), millis(millisecondsTtl), remover, reader, recordsCleaned)));
         Pipeline<PipelineContext, PipelineContext> withQuarantineExpiry = millisecondsQuarantineTtl == null ? expiry : expiry
                 .add(new ObservedStep<>("expired-quarantine",
-                        new PurgeExpiredQuarantineStep(getErrorRouter(), millis(millisecondsQuarantineTtl), reader,
-                                QuarantinedEnvelopes.of(reader, updater, remover, quarantineRepository, publisher), recordsCleaned)));
-        return withQuarantineExpiry
+                        new PurgeExpiredQuarantineStep(getErrorRouter(), millis(millisecondsQuarantineTtl), reader, remover, recordsCleaned)));
+        Pipeline<PipelineContext, PipelineContext> withQuarantineRetention = millisecondsQuarantineRetention == null ? withQuarantineExpiry : withQuarantineExpiry
+                .add(new ObservedStep<>("resolved-quarantine",
+                        new PurgeResolvedQuarantineStep(getErrorRouter(), Duration.ofMillis(millisecondsQuarantineRetention),
+                                quarantineRepository, recordsCleaned)));
+        return withQuarantineRetention
                 .add(new ObservedStep<>("handle-stuck-envelopes",
                         new RepublishStuckEnvelopesStep(reader, updater, publisher, millis(millisecondsThreshold), Objects.requireNonNullElse(maxRetries, 3), recordsCleaned)));
     }

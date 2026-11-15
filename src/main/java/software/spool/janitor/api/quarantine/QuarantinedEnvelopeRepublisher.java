@@ -9,13 +9,15 @@ import java.util.Optional;
  * Sends envelopes in quarantine back to the inbox so the ingester processes them again.
  *
  * <p>
- * Each republished envelope loses its quarantine record, and an {@code EnvelopeRepublished} event is published so
- * there is a trace of it. A key that is not in quarantine is skipped and its envelope is not touched.
+ * Each republished envelope's quarantine record is marked as republished or corrected, and an
+ * {@code EnvelopeRepublished} event is published so there is a trace of it. A key without a pending quarantine record
+ * is skipped and its envelope is not touched.
  * </p>
  */
 public interface QuarantinedEnvelopeRepublisher {
     /**
-     * Returns envelopes to the inbox as they were, with their retries back to zero.
+     * Returns envelopes to the inbox as they were, with their retries back to zero, even if the inbox had already
+     * removed them.
      *
      * @param idempotencyKeys the keys of the envelopes to republish
      * @return the keys that were republished

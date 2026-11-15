@@ -5,7 +5,10 @@ import software.spool.core.adapter.memory.InMemoryQuarantineRepository;
 import software.spool.core.model.EnvelopeStatus;
 import software.spool.core.model.Event;
 import software.spool.core.model.event.EnvelopePurged;
+import software.spool.core.model.quarantine.QuarantineLocation;
 import software.spool.core.model.quarantine.QuarantineReason;
+import software.spool.core.model.quarantine.QuarantineResolution;
+import software.spool.core.model.quarantine.QuarantineStatus;
 import software.spool.core.model.quarantine.QuarantinedRecord;
 import software.spool.core.model.vo.Envelope;
 import software.spool.core.model.vo.EventMetadata;
@@ -76,13 +79,16 @@ class PollingJanitorBuilderTest {
     }
 
     @Test
-    void pipeline_withAQuarantineTtl_purgesTheEnvelopeAndItsRecord() {
+    void pipeline_withAQuarantineTtl_removesTheEnvelopeFromTheInboxButKeepsItsPendingRecord() {
         InMemoryQuarantineRepository repository = new InMemoryQuarantineRepository();
         Envelope quarantinedEnvelope = envelope("quarantined");
-        repository.save(new QuarantinedRecord(quarantinedEnvelope, QuarantineReason.RETRIES_EXHAUSTED, List.of(), Instant.now()));
+        repository.save(QuarantinedRecord.pending(quarantinedEnvelope, QuarantineLocation.inbox(), QuarantineReason.RETRIES_EXHAUSTED,
+                List.of(), Instant.now()));
+        List<IdempotencyKey> removed = new ArrayList<>();
         List<Event> published = new ArrayList<>();
         PollingJanitorBuilder builder = builder(inboxHolding(EnvelopeStatus.QUARANTINED, quarantinedEnvelope, new ArrayList<>(), new ArrayList<>()))
                 .quarantineIn(repository)
+                .removeWith(keys -> { removed.addAll(keys); return List.of(); })
                 .on(new EventPublisher() {
                     @Override
                     public <E extends Event> void publish(E event) {
@@ -93,8 +99,37 @@ class PollingJanitorBuilderTest {
 
         builder.initializePipeline((value, attributes) -> {}).execute(emptyCycle());
 
-        assertThat(repository.findAll()).isEmpty();
-        assertThat(published).filteredOn(EnvelopePurged.class::isInstance).hasSize(1);
+        assertThat(removed).containsExactly(quarantinedEnvelope.idempotencyKey());
+        assertThat(repository.find(quarantinedEnvelope.idempotencyKey())).map(QuarantinedRecord::status).contains(QuarantineStatus.PENDING);
+        assertThat(published).noneMatch(EnvelopePurged.class::isInstance);
+    }
+
+    @Test
+    void pipeline_withAQuarantineRetention_deletesOnlyTheRecordsResolvedLongerAgo() {
+        InMemoryQuarantineRepository repository = new InMemoryQuarantineRepository();
+        Instant longAgo = Instant.now().minus(Duration.ofDays(60));
+        repository.save(record("resolved-long-ago", longAgo).resolve(QuarantineResolution.purged(longAgo)));
+        repository.save(record("resolved-recently", longAgo).resolve(QuarantineResolution.republished(Instant.now())));
+        repository.save(record("pending-long-ago", longAgo));
+        PollingJanitorBuilder builder = builder()
+                .quarantineIn(repository)
+                .withMillisecondsQuarantineRetention(Duration.ofDays(30).toMillis());
+
+        builder.initializePipeline((value, attributes) -> {}).execute(emptyCycle());
+
+        assertThat(repository.findAll()).extracting(quarantinedRecord -> quarantinedRecord.idempotencyKey().value())
+                .containsExactlyInAnyOrder("resolved-recently", "pending-long-ago");
+    }
+
+    @Test
+    void pipeline_withoutAQuarantineRetention_keepsTheResolvedRecords() {
+        InMemoryQuarantineRepository repository = new InMemoryQuarantineRepository();
+        Instant longAgo = Instant.now().minus(Duration.ofDays(3650));
+        repository.save(record("resolved-long-ago", longAgo).resolve(QuarantineResolution.purged(longAgo)));
+
+        builder().quarantineIn(repository).initializePipeline((value, attributes) -> {}).execute(emptyCycle());
+
+        assertThat(repository.findAll()).hasSize(1);
     }
 
     @Test
@@ -152,6 +187,10 @@ class PollingJanitorBuilderTest {
                 return asked == status ? List.of(held) : List.of();
             }
         };
+    }
+
+    private static QuarantinedRecord record(String key, Instant quarantinedAt) {
+        return QuarantinedRecord.pending(envelope(key), QuarantineLocation.inbox(), QuarantineReason.VALIDATION_FAILED, List.of(), quarantinedAt);
     }
 
     private static Envelope envelope(String key) {

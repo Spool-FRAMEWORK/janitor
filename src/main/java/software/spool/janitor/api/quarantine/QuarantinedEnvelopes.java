@@ -5,13 +5,16 @@ import software.spool.core.model.EnvelopeStatus;
 import software.spool.core.model.event.EnvelopePurged;
 import software.spool.core.model.event.EnvelopeRepublished;
 import software.spool.core.model.event.EnvelopeStored;
+import software.spool.core.model.quarantine.QuarantineLocation;
+import software.spool.core.model.quarantine.QuarantineResolution;
+import software.spool.core.model.quarantine.QuarantineStatus;
+import software.spool.core.model.quarantine.QuarantinedRecord;
 import software.spool.core.model.vo.Envelope;
 import software.spool.core.model.vo.EventMetadata;
 import software.spool.core.model.vo.EventMetadataKey;
 import software.spool.core.model.vo.IdempotencyKey;
 import software.spool.core.port.bus.EventPublisher;
 import software.spool.core.port.inbox.InboxEnvelopeRemover;
-import software.spool.core.port.inbox.InboxStatusQuery;
 import software.spool.core.port.inbox.InboxUpdater;
 import software.spool.core.port.logging.Logger;
 import software.spool.core.port.quarantine.QuarantineRepository;
@@ -22,61 +25,60 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 /**
- * The envelopes of an inbox that are in quarantine, and what a person can do with them.
+ * The envelopes in quarantine, and what a person can do with them.
  *
  * <p>
- * The quarantine is read in full to know what is in it, which is fine for a place that should hold few envelopes.
+ * What is in quarantine comes from the quarantine records, not from the inbox: an envelope can be resolved even
+ * after the inbox has removed it. Resolving a record marks how it ended instead of deleting it.
  * </p>
  */
 public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublisher, QuarantinedEnvelopePurger {
     private static final Logger LOG = LoggerFactory.getLogger(QuarantinedEnvelopes.class);
 
-    private final InboxStatusQuery reader;
     private final InboxUpdater updater;
     private final InboxEnvelopeRemover remover;
     private final QuarantineRepository quarantineRepository;
     private final EventPublisher publisher;
 
-    private QuarantinedEnvelopes(InboxStatusQuery reader, InboxUpdater updater, InboxEnvelopeRemover remover,
+    private QuarantinedEnvelopes(InboxUpdater updater, InboxEnvelopeRemover remover,
                                  QuarantineRepository quarantineRepository, EventPublisher publisher) {
-        this.reader = reader;
         this.updater = updater;
         this.remover = remover;
         this.quarantineRepository = quarantineRepository;
         this.publisher = publisher;
     }
 
-    public static QuarantinedEnvelopes of(InboxStatusQuery reader, InboxUpdater updater, InboxEnvelopeRemover remover,
+    public static QuarantinedEnvelopes of(InboxUpdater updater, InboxEnvelopeRemover remover,
                                           QuarantineRepository quarantineRepository, EventPublisher publisher) {
-        return new QuarantinedEnvelopes(reader, updater, remover, quarantineRepository, publisher);
+        return new QuarantinedEnvelopes(updater, remover, quarantineRepository, publisher);
     }
 
     @Override
     public Collection<IdempotencyKey> republish(Collection<IdempotencyKey> idempotencyKeys) {
-        List<Envelope> quarantined = inQuarantine(idempotencyKeys);
-        if (quarantined.isEmpty()) return List.of();
-        Collection<Envelope> moved = updater.update(keysOf(quarantined), EnvelopeStatus.CAPTURED);
-        moved.forEach(envelope -> {
-            updater.update(withoutRetries(envelope));
-            quarantineRepository.delete(envelope.idempotencyKey());
+        List<QuarantinedRecord> pending = pendingInTheInbox(idempotencyKeys);
+        if (pending.isEmpty()) return List.of();
+        updater.update(keysOf(pending), EnvelopeStatus.CAPTURED);
+        Instant now = Instant.now();
+        pending.forEach(quarantinedRecord -> {
+            Envelope envelope = quarantinedRecord.envelope();
+            updater.update(capturedWithoutRetries(envelope, now));
+            quarantineRepository.save(quarantinedRecord.resolve(QuarantineResolution.republished(now)));
             publisher.publish(storedEventOf(envelope, envelope.idempotencyKey()));
             publisher.publish(republishedEventOf(envelope, envelope.idempotencyKey()));
         });
-        LOG.info("Republished {} envelopes from quarantine", moved.size());
-        return keysOf(moved);
+        LOG.info("Republished {} envelopes from quarantine", pending.size());
+        return keysOf(pending);
     }
 
     @Override
     public Optional<IdempotencyKey> republish(IdempotencyKey idempotencyKey, byte[] correctedPayload) {
-        Optional<Envelope> quarantined = inQuarantine(List.of(idempotencyKey)).stream().findFirst();
-        if (quarantined.isEmpty()) return Optional.empty();
-        Envelope original = quarantined.get();
+        Optional<QuarantinedRecord> pending = pendingInTheInbox(List.of(idempotencyKey)).stream().findFirst();
+        if (pending.isEmpty()) return Optional.empty();
+        QuarantinedRecord quarantinedRecord = pending.get();
+        Envelope original = quarantinedRecord.envelope();
         IdempotencyKey correctedKey = IdempotencyKey.of(sourceOf(original), correctedPayload);
         if (correctedKey.equals(idempotencyKey)) {
             return republish(List.of(idempotencyKey)).stream().findFirst();
@@ -85,7 +87,7 @@ public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublishe
         updater.update(new Envelope(correctedKey, correctedMetadataOf(original), original.mediaType(), correctedPayload,
                 EnvelopeStatus.CAPTURED, 0, now, now));
         remover.remove(List.of(idempotencyKey));
-        quarantineRepository.delete(idempotencyKey);
+        quarantineRepository.save(quarantinedRecord.resolve(QuarantineResolution.corrected(now, correctedKey)));
         publisher.publish(storedEventOf(original, correctedKey));
         publisher.publish(republishedEventOf(original, correctedKey));
         LOG.info("Republished {} from quarantine as {} with a corrected payload", idempotencyKey.value(), correctedKey.value());
@@ -94,35 +96,42 @@ public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublishe
 
     @Override
     public Collection<IdempotencyKey> purge(Collection<IdempotencyKey> idempotencyKeys) {
-        List<Envelope> quarantined = inQuarantine(idempotencyKeys);
-        if (quarantined.isEmpty()) return List.of();
-        List<IdempotencyKey> keys = keysOf(quarantined);
+        List<QuarantinedRecord> pending = pendingInTheInbox(idempotencyKeys);
+        if (pending.isEmpty()) return List.of();
+        List<IdempotencyKey> keys = keysOf(pending);
         remover.remove(keys);
-        quarantined.forEach(envelope -> {
-            quarantineRepository.delete(envelope.idempotencyKey());
+        Instant now = Instant.now();
+        pending.forEach(quarantinedRecord -> {
+            quarantineRepository.save(quarantinedRecord.resolve(QuarantineResolution.purged(now)));
             publisher.publish(EnvelopePurged.builder()
-                    .correlationId(envelope.metadata().get(EventMetadataKey.CORRELATION_ID))
-                    .idempotencyKey(envelope.idempotencyKey())
+                    .correlationId(quarantinedRecord.envelope().metadata().get(EventMetadataKey.CORRELATION_ID))
+                    .idempotencyKey(quarantinedRecord.idempotencyKey())
                     .build());
         });
         LOG.warn("Purged {} envelopes from quarantine", keys.size());
         return keys;
     }
 
-    private List<Envelope> inQuarantine(Collection<IdempotencyKey> idempotencyKeys) {
-        Map<IdempotencyKey, Envelope> quarantined = reader.findByStatus(EnvelopeStatus.QUARANTINED).stream()
-                .collect(Collectors.toMap(Envelope::idempotencyKey, Function.identity(), (first, second) -> second));
-        List<Envelope> selected = new ArrayList<>();
+    private List<QuarantinedRecord> pendingInTheInbox(Collection<IdempotencyKey> idempotencyKeys) {
+        List<QuarantinedRecord> selected = new ArrayList<>();
         for (IdempotencyKey idempotencyKey : new LinkedHashSet<>(idempotencyKeys)) {
-            Optional<Envelope> envelope = Optional.ofNullable(quarantined.get(idempotencyKey));
-            envelope.ifPresentOrElse(selected::add,
-                    () -> LOG.warn("Skipped {}: it is not in quarantine", idempotencyKey.value()));
+            Optional<QuarantinedRecord> found = quarantineRepository.find(idempotencyKey);
+            if (found.isEmpty()) {
+                LOG.warn("Skipped {}: it is not in quarantine", idempotencyKey.value());
+            } else if (found.get().status() != QuarantineStatus.PENDING) {
+                LOG.warn("Skipped {}: its quarantine is already {}", idempotencyKey.value(), found.get().status());
+            } else if (!(found.get().location() instanceof QuarantineLocation.Inbox)) {
+                LOG.warn("Skipped {}: it stayed in bronze, and quarantine records from bronze cannot be resolved yet",
+                        idempotencyKey.value());
+            } else {
+                selected.add(found.get());
+            }
         }
         return selected;
     }
 
-    private static List<IdempotencyKey> keysOf(Collection<Envelope> envelopes) {
-        return envelopes.stream().map(Envelope::idempotencyKey).toList();
+    private static List<IdempotencyKey> keysOf(Collection<QuarantinedRecord> records) {
+        return records.stream().map(QuarantinedRecord::idempotencyKey).toList();
     }
 
     private static String sourceOf(Envelope envelope) {
@@ -136,9 +145,9 @@ public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublishe
                 .set(EventMetadataKey.CORRECTED_FROM, original.idempotencyKey().value());
     }
 
-    private static Envelope withoutRetries(Envelope envelope) {
+    private static Envelope capturedWithoutRetries(Envelope envelope, Instant updatedAt) {
         return new Envelope(envelope.idempotencyKey(), envelope.metadata(), envelope.mediaType(), envelope.payload(),
-                EnvelopeStatus.CAPTURED, 0, envelope.capturedAt(), envelope.updatedAt());
+                EnvelopeStatus.CAPTURED, 0, envelope.capturedAt(), updatedAt);
     }
 
     private static EnvelopeStored storedEventOf(Envelope original, IdempotencyKey republishedKey) {
