@@ -31,11 +31,13 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class QuarantinedEnvelopesTest {
 
     private static final IdempotencyKey KEY = IdempotencyKey.of("k1");
     private static final byte[] CORRECTED_PAYLOAD = "{\"price\":10}".getBytes(StandardCharsets.UTF_8);
+    private static final String BYPASS_REASON = "price rule misconfigured";
 
     private final FakeInbox inbox = new FakeInbox();
     private static final PartitionKey PARTITION = PartitionKey.ofEntriesWithoutDate().with("year", "2026")
@@ -90,7 +92,7 @@ class QuarantinedEnvelopesTest {
         assertThat(published.get(1)).isInstanceOfSatisfying(EnvelopeRepublished.class, event -> {
             assertThat(event.idempotencyKey()).isEqualTo(KEY);
             assertThat(event.republishedIdempotencyKey()).isEqualTo(KEY);
-            assertThat(event.wasCorrected()).isFalse();
+            assertThat(event.resolution()).isEqualTo(EnvelopeRepublished.Resolution.UNCHANGED);
         });
     }
 
@@ -127,7 +129,7 @@ class QuarantinedEnvelopesTest {
         assertThat(published.get(1)).isInstanceOfSatisfying(EnvelopeRepublished.class, event -> {
             assertThat(event.idempotencyKey()).isEqualTo(KEY);
             assertThat(event.republishedIdempotencyKey()).isEqualTo(correctedKey);
-            assertThat(event.wasCorrected()).isTrue();
+            assertThat(event.resolution()).isEqualTo(EnvelopeRepublished.Resolution.CORRECTED);
         });
     }
 
@@ -240,6 +242,74 @@ class QuarantinedEnvelopesTest {
 
         assertThat(inbox.stored("k1")).isEmpty();
         assertThat(repository.find(KEY)).map(QuarantinedRecord::status).contains(QuarantineStatus.PENDING);
+        assertThat(published).isEmpty();
+    }
+
+    @Test
+    void bypass_recordThatStayedInTheInbox_returnsItAsCapturedWithTheMark() {
+        inQuarantine(envelope(EnvelopeStatus.QUARANTINED));
+
+        assertThat(quarantinedEnvelopes.bypass(KEY, BYPASS_REASON)).contains(KEY);
+
+        Envelope bypassed = inbox.stored("k1").orElseThrow();
+        assertThat(bypassed.status()).isEqualTo(EnvelopeStatus.CAPTURED);
+        assertThat(bypassed.retries()).isZero();
+        assertThat(bypassed.payload()).isEqualTo("{\"price\":-1}".getBytes(StandardCharsets.UTF_8));
+        assertThat(bypassed.metadata().get(EventMetadataKey.VALIDATION_BYPASS)).isEqualTo(BYPASS_REASON);
+    }
+
+    @Test
+    void bypass_recordThatStayedInTheInbox_marksItBypassedWithItsReasonAndPublishesStoredAndRepublished() {
+        inQuarantine(envelope(EnvelopeStatus.QUARANTINED));
+
+        quarantinedEnvelopes.bypass(KEY, BYPASS_REASON);
+
+        assertThat(repository.find(KEY).orElseThrow().resolution())
+                .isInstanceOfSatisfying(QuarantineResolution.Bypassed.class,
+                        bypassed -> assertThat(bypassed.reason()).isEqualTo(BYPASS_REASON));
+        assertThat(published).hasSize(2);
+        assertThat(published.get(0)).isInstanceOf(EnvelopeStored.class);
+        assertThat(published.get(1)).isInstanceOfSatisfying(EnvelopeRepublished.class, event -> {
+            assertThat(event.republishedIdempotencyKey()).isEqualTo(KEY);
+            assertThat(event.resolution()).isEqualTo(EnvelopeRepublished.Resolution.BYPASSED);
+        });
+    }
+
+    @Test
+    void bypass_recordThatStayedInBronze_writesItBackToItsPartitionWithTheMarkWithoutTouchingTheInbox() {
+        Envelope persisted = envelope(EnvelopeStatus.PERSISTED);
+        inbox.with(persisted);
+        repository.save(pendingRecord(persisted, QuarantineLocation.bronze(PARTITION)));
+
+        assertThat(quarantinedEnvelopes.bypass(KEY, BYPASS_REASON)).contains(KEY);
+
+        Envelope bypassed = bronze.find(PARTITION, KEY).orElseThrow();
+        assertThat(bypassed.status()).isEqualTo(EnvelopeStatus.PERSISTED);
+        assertThat(bypassed.metadata().get(EventMetadataKey.VALIDATION_BYPASS)).isEqualTo(BYPASS_REASON);
+        assertThat(inbox.stored("k1")).contains(persisted);
+        assertThat(repository.find(KEY)).map(QuarantinedRecord::status).contains(QuarantineStatus.BYPASSED);
+        assertThat(published.get(0)).isInstanceOfSatisfying(EnvelopePersisted.class,
+                event -> assertThat(event.partitionKey()).isEqualTo(PARTITION));
+        assertThat(published.get(1)).isInstanceOfSatisfying(EnvelopeRepublished.class,
+                event -> assertThat(event.resolution()).isEqualTo(EnvelopeRepublished.Resolution.BYPASSED));
+    }
+
+    @Test
+    void bypass_blankReason_failsAndLeavesTheRecordPending() {
+        inQuarantine(envelope(EnvelopeStatus.QUARANTINED));
+
+        assertThatThrownBy(() -> quarantinedEnvelopes.bypass(KEY, " "))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reason");
+
+        assertThat(repository.find(KEY)).map(QuarantinedRecord::status).contains(QuarantineStatus.PENDING);
+        assertThat(published).isEmpty();
+    }
+
+    @Test
+    void bypass_keyWithoutPendingRecord_skipsItAndPublishesNothing() {
+        assertThat(quarantinedEnvelopes.bypass(KEY, BYPASS_REASON)).isEmpty();
+
         assertThat(published).isEmpty();
     }
 

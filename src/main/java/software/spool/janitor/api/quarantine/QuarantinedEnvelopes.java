@@ -37,10 +37,12 @@ import java.util.Optional;
  * after the inbox has removed it. Resolving a record marks how it ended instead of deleting it, and sends the
  * envelope back to where it stayed: an envelope from the inbox returns to the inbox as {@code CAPTURED}, and one
  * from bronze is written again to its bronze partition, followed by {@link EnvelopePersisted} so it is mounted again.
- * The inbox is never touched for an envelope that stayed in bronze.
+ * The inbox is never touched for an envelope that stayed in bronze. A bypass sends it back the same way, with the
+ * {@code VALIDATION_BYPASS} metadata.
  * </p>
  */
-public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublisher, QuarantinedEnvelopePurger {
+public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublisher, QuarantinedEnvelopeBypasser,
+        QuarantinedEnvelopePurger {
     private static final Logger LOG = LoggerFactory.getLogger(QuarantinedEnvelopes.class);
 
     private final InboxUpdater updater;
@@ -85,7 +87,7 @@ public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublishe
             Envelope envelope = quarantinedRecord.envelope();
             sendBack(quarantinedRecord, envelope, now);
             quarantineRepository.save(quarantinedRecord.resolve(QuarantineResolution.republished(now)));
-            publisher.publish(republishedEventOf(envelope, envelope.idempotencyKey()));
+            publisher.publish(republishedEventOf(envelope, envelope.idempotencyKey(), EnvelopeRepublished.Resolution.UNCHANGED));
         });
         LOG.info("Republished {} envelopes from quarantine", pending.size());
         return keysOf(pending);
@@ -107,9 +109,26 @@ public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublishe
         sendBack(quarantinedRecord, corrected, now);
         if (stayedInTheInbox(quarantinedRecord)) remover.remove(List.of(idempotencyKey));
         quarantineRepository.save(quarantinedRecord.resolve(QuarantineResolution.corrected(now, correctedKey)));
-        publisher.publish(republishedEventOf(original, correctedKey));
+        publisher.publish(republishedEventOf(original, correctedKey, EnvelopeRepublished.Resolution.CORRECTED));
         LOG.info("Republished {} from quarantine as {} with a corrected payload", idempotencyKey.value(), correctedKey.value());
         return Optional.of(correctedKey);
+    }
+
+    @Override
+    public Optional<IdempotencyKey> bypass(IdempotencyKey idempotencyKey, String reason) {
+        Instant now = Instant.now();
+        QuarantineResolution bypassed = QuarantineResolution.bypassed(now, reason);
+        Optional<QuarantinedRecord> pending = resolvable(List.of(idempotencyKey)).stream().findFirst();
+        if (pending.isEmpty()) return Optional.empty();
+        QuarantinedRecord quarantinedRecord = pending.get();
+        Envelope original = quarantinedRecord.envelope();
+        Envelope marked = new Envelope(original.idempotencyKey(), bypassedMetadataOf(original, reason), original.mediaType(),
+                original.payload(), original.status(), original.retries(), original.capturedAt(), now);
+        sendBack(quarantinedRecord, marked, now);
+        quarantineRepository.save(quarantinedRecord.resolve(bypassed));
+        publisher.publish(republishedEventOf(original, idempotencyKey, EnvelopeRepublished.Resolution.BYPASSED));
+        LOG.warn("Republished {} from quarantine with a validation bypass: {}", idempotencyKey.value(), reason);
+        return Optional.of(idempotencyKey);
     }
 
     @Override
@@ -192,11 +211,18 @@ public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublishe
                 EnvelopeStatus.CAPTURED, 0, envelope.capturedAt(), updatedAt);
     }
 
-    private static EnvelopeRepublished republishedEventOf(Envelope original, IdempotencyKey republishedKey) {
+    private static EventMetadata bypassedMetadataOf(Envelope original, String reason) {
+        return new EventMetadata(new HashMap<>(original.metadata().metadata()))
+                .set(EventMetadataKey.VALIDATION_BYPASS, reason);
+    }
+
+    private static EnvelopeRepublished republishedEventOf(Envelope original, IdempotencyKey republishedKey,
+                                                          EnvelopeRepublished.Resolution resolution) {
         return EnvelopeRepublished.builder()
                 .correlationId(original.metadata().get(EventMetadataKey.CORRELATION_ID))
                 .idempotencyKey(original.idempotencyKey())
                 .republishedIdempotencyKey(republishedKey)
+                .resolution(resolution)
                 .build();
     }
 }
