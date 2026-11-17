@@ -1,16 +1,13 @@
 package software.spool.janitor.internal.control;
 
-import software.spool.core.exception.SpoolException;
 import software.spool.core.pipeline.Pipeline;
 import software.spool.core.pipeline.PipelineContext;
-import software.spool.core.port.bus.Handler;
 import software.spool.core.port.metrics.MetricsRegistry;
 import software.spool.core.utils.routing.ErrorRouter;
 
 import java.util.Map;
 
-public class JanitorScheduleHandler implements Handler<EventsDTO
-        > {
+public class JanitorScheduleHandler implements JanitorCycle {
     private final Pipeline<PipelineContext, PipelineContext> pipeline;
     private final ErrorRouter errorRouter;
     private final MetricsRegistry.CounterMetric cyclesCompleted;
@@ -26,12 +23,14 @@ public class JanitorScheduleHandler implements Handler<EventsDTO
     }
 
     @Override
-    public void handle(EventsDTO events) throws SpoolException {
+    public EventsDTO run(EventsDTO events) {
         long start = System.nanoTime();
+        UnappliedEvents unapplied = new UnappliedEvents();
         try {
             pipeline.execute(PipelineContext.empty()
                     .with(JanitorScheduleKeys.ENVELOPES_PERSISTED, events.envelopesPersisted())
-                    .with(JanitorScheduleKeys.ENVELOPES_QUARANTINED, events.envelopesQuarantined()));
+                    .with(JanitorScheduleKeys.ENVELOPES_QUARANTINED, events.envelopesQuarantined())
+                    .with(JanitorScheduleKeys.UNAPPLIED_EVENTS, unapplied));
             cyclesCompleted.increment(Map.of());
         } catch (Exception e) {
             cyclesFailed.increment(Map.of());
@@ -39,5 +38,6 @@ public class JanitorScheduleHandler implements Handler<EventsDTO
         } finally {
             cycleDuration.record((System.nanoTime() - start) / 1_000_000, Map.of());
         }
+        return unapplied.toEvents();
     }
 }

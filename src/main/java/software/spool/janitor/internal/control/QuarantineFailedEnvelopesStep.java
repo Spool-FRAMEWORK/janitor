@@ -1,6 +1,7 @@
 package software.spool.janitor.internal.control;
 
 import software.spool.core.adapter.logging.LoggerFactory;
+import software.spool.core.exception.InboxUpdateException;
 import software.spool.core.model.EnvelopeStatus;
 import software.spool.core.model.failure.EnvelopeQuarantined;
 import software.spool.core.model.quarantine.QuarantineLocation;
@@ -41,7 +42,16 @@ public class QuarantineFailedEnvelopesStep implements Step<PipelineContext, Pipe
         Map<IdempotencyKey, EnvelopeQuarantined> lastEventByKey = events.stream()
                 .filter(event -> event.location() instanceof QuarantineLocation.Inbox)
                 .collect(Collectors.toMap(EnvelopeQuarantined::idempotencyKey, Function.identity(), (first, last) -> last));
-        Collection<Envelope> quarantined = updater.update(lastEventByKey.keySet(), EnvelopeStatus.QUARANTINED);
+        if (lastEventByKey.isEmpty()) return context;
+        Collection<Envelope> quarantined;
+        try {
+            quarantined = updater.update(lastEventByKey.keySet(), EnvelopeStatus.QUARANTINED);
+        } catch (InboxUpdateException exception) {
+            LOG.warn("Could not mark {} envelopes as quarantined in the inbox; trying again in the next round: {}",
+                    lastEventByKey.size(), exception.getMessage());
+            context.require(JanitorScheduleKeys.UNAPPLIED_EVENTS).quarantined(lastEventByKey.values());
+            return context;
+        }
         Instant quarantinedAt = Instant.now();
         quarantined.forEach(envelope -> {
             EnvelopeQuarantined event = lastEventByKey.get(envelope.idempotencyKey());

@@ -2,6 +2,7 @@ package software.spool.janitor.internal.control;
 
 import org.junit.jupiter.api.Test;
 import software.spool.core.adapter.memory.InMemoryQuarantineRepository;
+import software.spool.core.exception.InboxUpdateException;
 import software.spool.core.model.EnvelopeStatus;
 import software.spool.core.model.failure.EnvelopeQuarantined;
 import software.spool.core.model.quarantine.QuarantineLocation;
@@ -94,6 +95,19 @@ class QuarantineFailedEnvelopesStepTest {
         assertThatCode(() -> step.apply(cycleWith(quarantined(QuarantineReason.VALIDATION_FAILED, List.of("a")))))
                 .doesNotThrowAnyException();
 
+        assertThat(repository.findAll()).isEmpty();
+    }
+
+    @Test
+    void apply_inboxFails_keepsTheEventsAsUnappliedAndRecordsNothing() throws AttributeNotFoundException {
+        QuarantineFailedEnvelopesStep failingStep = new QuarantineFailedEnvelopesStep(
+                (keys, status) -> { throw new InboxUpdateException(keys, "inbox unavailable"); }, repository, (value, attributes) -> {});
+        UnappliedEvents unapplied = new UnappliedEvents();
+        EnvelopeQuarantined event = quarantined(QuarantineReason.VALIDATION_FAILED, List.of("a"));
+
+        failingStep.apply(cycleWith(event).with(JanitorScheduleKeys.UNAPPLIED_EVENTS, unapplied));
+
+        assertThat(unapplied.toEvents().envelopesQuarantined()).containsExactly(event);
         assertThat(repository.findAll()).isEmpty();
     }
 

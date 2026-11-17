@@ -1,15 +1,19 @@
 package software.spool.janitor.api.strategy;
 
 import software.spool.core.adapter.logging.LoggerFactory;
+import software.spool.core.exception.InboxUpdateException;
+import software.spool.core.model.Event;
+import software.spool.core.model.vo.IdempotencyKey;
 import software.spool.core.model.event.EnvelopePersisted;
 import software.spool.core.model.failure.EnvelopeQuarantined;
 import software.spool.core.port.bus.EventSubscriber;
-import software.spool.core.port.bus.Handler;
 import software.spool.core.port.inbox.InboxStatusQuery;
 import software.spool.core.port.logging.Logger;
 import software.spool.core.utils.polling.CancellationToken;
 import software.spool.core.utils.polling.PollingConfiguration;
+import software.spool.core.utils.routing.ErrorRouter;
 import software.spool.janitor.internal.control.EventsDTO;
+import software.spool.janitor.internal.control.JanitorCycle;
 
 import java.time.Duration;
 import java.util.*;
@@ -18,13 +22,25 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 public class PollingJanitorStrategy implements JanitorStrategy {
     private static final Logger LOG = LoggerFactory.getLogger(PollingJanitorStrategy.class);
     private final EventSubscriber subscriber;
-    private final Handler<EventsDTO> janitorScheduleHandler;
+    private final JanitorCycle cycle;
     private final PollingConfiguration pollingConfiguration;
+    private final int maxInboxUpdateAttempts;
+    private final ErrorRouter errorRouter;
+    private final Map<String, Integer> attemptsByEventId = new HashMap<>();
 
-    public PollingJanitorStrategy(InboxStatusQuery reader, EventSubscriber subscriber, Handler<EventsDTO> janitorScheduleHandler, PollingConfiguration pollingConfiguration) {
+    /**
+     * @param maxInboxUpdateAttempts how many rounds an event is tried before the janitor stops retrying it and reports
+     *                               it to the error router; at least 1
+     */
+    public PollingJanitorStrategy(InboxStatusQuery reader, EventSubscriber subscriber, JanitorCycle cycle,
+                                  PollingConfiguration pollingConfiguration, int maxInboxUpdateAttempts, ErrorRouter errorRouter) {
+        if (maxInboxUpdateAttempts < 1)
+            throw new IllegalArgumentException("maxInboxUpdateAttempts must be at least 1, got " + maxInboxUpdateAttempts);
         this.subscriber = Objects.requireNonNull(subscriber);
-        this.janitorScheduleHandler = Objects.requireNonNull(janitorScheduleHandler);
+        this.cycle = Objects.requireNonNull(cycle);
         this.pollingConfiguration = Objects.requireNonNullElse(pollingConfiguration, PollingConfiguration.every(Duration.ofSeconds(10)));
+        this.maxInboxUpdateAttempts = maxInboxUpdateAttempts;
+        this.errorRouter = Objects.requireNonNull(errorRouter);
     }
 
     @Override
@@ -37,7 +53,8 @@ public class PollingJanitorStrategy implements JanitorStrategy {
                 () -> {
                     try {
                         LOG.info("Polling janitor strategy execution started");
-                        janitorScheduleHandler.handle(new EventsDTO(drain(persistedEnvelopes), drain(quarantinedEnvelopes)));
+                        EventsDTO unapplied = cycle.run(new EventsDTO(drain(persistedEnvelopes), drain(quarantinedEnvelopes)));
+                        retry(unapplied, persistedEnvelopes, quarantinedEnvelopes);
                     } catch (Exception e) {
                         LOG.error("Exception occurred while polling janitor strategy", e);
                     }
@@ -45,6 +62,31 @@ public class PollingJanitorStrategy implements JanitorStrategy {
                 pollingConfiguration.policy(),
                 token
         );
+    }
+
+    /**
+     * Puts back in their queues the events the round could not apply, except those that have used up their attempts,
+     * which are reported instead. An event applied in this round is forgotten.
+     */
+    private void retry(EventsDTO unapplied, Queue<EnvelopePersisted> persistedEnvelopes,
+                       Queue<EnvelopeQuarantined> quarantinedEnvelopes) {
+        Set<String> unappliedIds = new HashSet<>();
+        unapplied.envelopesPersisted().forEach(event -> unappliedIds.add(event.eventId()));
+        unapplied.envelopesQuarantined().forEach(event -> unappliedIds.add(event.eventId()));
+        attemptsByEventId.keySet().retainAll(unappliedIds);
+        unapplied.envelopesPersisted().forEach(event -> retry(event, event.idempotencyKey(), persistedEnvelopes));
+        unapplied.envelopesQuarantined().forEach(event -> retry(event, event.idempotencyKey(), quarantinedEnvelopes));
+    }
+
+    private <E extends Event> void retry(E event, IdempotencyKey idempotencyKey, Queue<E> queue) {
+        int attempts = attemptsByEventId.merge(event.eventId(), 1, Integer::sum);
+        if (attempts < maxInboxUpdateAttempts) {
+            queue.add(event);
+            return;
+        }
+        attemptsByEventId.remove(event.eventId());
+        errorRouter.dispatch(new InboxUpdateException(idempotencyKey, "The janitor stopped retrying "
+                + event.getClass().getSimpleName() + " for " + idempotencyKey.value() + " after " + attempts + " attempts"));
     }
 
     /**

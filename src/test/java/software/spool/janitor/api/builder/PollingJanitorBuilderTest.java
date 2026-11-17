@@ -66,6 +66,14 @@ class PollingJanitorBuilderTest {
     }
 
     @Test
+    void create_withZeroInboxUpdateAttempts_failsNamingTheSetting() {
+        assertThatThrownBy(() -> builder().withMaxInboxUpdateAttempts(0).create())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("maxInboxUpdateAttempts")
+                .hasMessageContaining("0");
+    }
+
+    @Test
     void create_withoutQuarantineRepository_failsWithAClearMessage() {
         PollingJanitorBuilder builder = JanitorBuilderFactory.watchdog(null, "janitor-test")
                 .polling()

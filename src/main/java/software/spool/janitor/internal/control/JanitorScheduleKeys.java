@@ -11,4 +11,5 @@ public class JanitorScheduleKeys {
 
     public static final ContextKey<Collection<EnvelopePersisted>> ENVELOPES_PERSISTED = ContextKey.of("envelopesPersisted");
     public static final ContextKey<Collection<EnvelopeQuarantined>> ENVELOPES_QUARANTINED = ContextKey.of("envelopesQuarantined");
+    public static final ContextKey<UnappliedEvents> UNAPPLIED_EVENTS = ContextKey.of("unappliedEvents");
 }

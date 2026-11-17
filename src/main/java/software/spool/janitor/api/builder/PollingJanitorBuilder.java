@@ -5,7 +5,6 @@ import software.spool.core.pipeline.Pipeline;
 import software.spool.core.pipeline.PipelineContext;
 import software.spool.core.port.bus.EventPublisher;
 import software.spool.core.port.bus.EventSubscriber;
-import software.spool.core.port.bus.Handler;
 import software.spool.core.port.decorator.SafeEventPublisher;
 import software.spool.core.port.decorator.SafeEventSubscriber;
 import software.spool.core.port.decorator.SafeInboxUpdater;
@@ -47,6 +46,7 @@ public class PollingJanitorBuilder {
     private Integer millisecondsQuarantineTtl;
     private Long millisecondsQuarantineRetention;
     private Integer maxRetries;
+    private Integer maxInboxUpdateAttempts;
     private final MetricsRegistry metricsRegistry = new OpenTelemetryMetricsRegistry();
 
     PollingJanitorBuilder(ModuleHeartBeat heartBeat) {
@@ -154,6 +154,18 @@ public class PollingJanitorBuilder {
         return this;
     }
 
+    /**
+     * How many rounds an event is tried when the inbox fails to apply it, before the janitor stops retrying it and
+     * reports it to the error router. At least 1; 3 by default.
+     *
+     * @param maxInboxUpdateAttempts the attempts, or {@code null} for the default
+     * @return this builder
+     */
+    public PollingJanitorBuilder withMaxInboxUpdateAttempts(Integer maxInboxUpdateAttempts) {
+        this.maxInboxUpdateAttempts = maxInboxUpdateAttempts;
+        return this;
+    }
+
     public Janitor create() {
         Objects.requireNonNull(quarantineRepository, "QuarantineRepository required");
         return new Janitor(initializeStrategy(), getErrorRouter(), heartBeat, quarantinedEnvelopes());
@@ -170,10 +182,11 @@ public class PollingJanitorBuilder {
     }
 
     private PollingJanitorStrategy initializeStrategy() {
-        return new PollingJanitorStrategy(reader, subscriber, initializeJanitorScheduleHandler(), pollingConfiguration);
+        return new PollingJanitorStrategy(reader, subscriber, initializeJanitorScheduleHandler(), pollingConfiguration,
+                Objects.requireNonNullElse(maxInboxUpdateAttempts, 3), getErrorRouter());
     }
 
-    private Handler<EventsDTO> initializeJanitorScheduleHandler() {
+    private JanitorCycle initializeJanitorScheduleHandler() {
         MetricsRegistry.CounterMetric cyclesCompleted = metricsRegistry.counter(SpoolMetrics.Janitor.CYCLES_COMPLETED_TOTAL, SpoolMetrics.Janitor.CYCLES_COMPLETED_TOTAL_DESC, "1");
         MetricsRegistry.CounterMetric cyclesFailed = metricsRegistry.counter(SpoolMetrics.Janitor.CYCLES_FAILED_TOTAL, SpoolMetrics.Janitor.CYCLES_FAILED_TOTAL_DESC, "1");
         MetricsRegistry.TimerMetric cycleDuration = metricsRegistry.timer(SpoolMetrics.Janitor.CYCLE_DURATION, SpoolMetrics.Janitor.CYCLE_DURATION_DESC, "s");

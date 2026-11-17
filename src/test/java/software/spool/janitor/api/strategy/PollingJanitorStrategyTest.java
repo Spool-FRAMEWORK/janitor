@@ -14,7 +14,9 @@ import software.spool.core.utils.polling.CancellationToken;
 import software.spool.core.utils.polling.PollingConfiguration;
 import software.spool.core.utils.polling.PollingPolicy;
 import software.spool.core.utils.polling.PollingScheduler;
+import software.spool.core.utils.routing.ErrorRouter;
 import software.spool.janitor.internal.control.EventsDTO;
+import software.spool.janitor.internal.control.JanitorCycle;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -34,10 +36,11 @@ class PollingJanitorStrategyTest {
     private final ManualScheduler scheduler = new ManualScheduler();
     private final List<Cycle> cycles = new ArrayList<>();
     private final List<Throwable> failures = new ArrayList<>();
+    private final List<Exception> reported = new ArrayList<>();
 
     @Test
     void execute_concurrentPublishers_cyclesReadTheEventsWithoutFailing() throws Exception {
-        start(dto -> {});
+        start(dto -> EventsDTO.none());
 
         publishConcurrently(4, 5_000);
 
@@ -46,7 +49,7 @@ class PollingJanitorStrategyTest {
 
     @Test
     void execute_eventsBeforeCycle_areDeliveredOnceAndNotRepeated() {
-        start(dto -> {});
+        start(dto -> EventsDTO.none());
 
         bus.emit(persisted("a"));
         bus.emit(persisted("b"));
@@ -61,6 +64,7 @@ class PollingJanitorStrategyTest {
     void execute_persistedEventEmittedDuringCycle_isDeliveredInNextCycle() {
         start(dto -> {
             if (cycles.size() == 1) bus.emit(persisted("during"));
+            return EventsDTO.none();
         });
 
         scheduler.runCycle();
@@ -74,6 +78,7 @@ class PollingJanitorStrategyTest {
     void execute_quarantinedEventEmittedDuringCycle_isDeliveredInNextCycle() {
         start(dto -> {
             if (cycles.size() == 1) bus.emit(quarantined("during"));
+            return EventsDTO.none();
         });
 
         scheduler.runCycle();
@@ -87,7 +92,7 @@ class PollingJanitorStrategyTest {
     void execute_concurrentPublishers_noEventIsLostOrDuplicated() throws Exception {
         int publishers = 4;
         int perPublisher = 5_000;
-        start(dto -> {});
+        start(dto -> EventsDTO.none());
 
         publishConcurrently(publishers, perPublisher);
 
@@ -95,19 +100,66 @@ class PollingJanitorStrategyTest {
         assertThat(delivered).hasSize(publishers * perPublisher).doesNotHaveDuplicates();
     }
 
-    private void start(Handler<EventsDTO> extra) {
-        Handler<EventsDTO> recording = dto -> {
+    @Test
+    void execute_eventsTheCycleCouldNotApply_areDeliveredAgainInTheNextCycle() {
+        start(dto -> cycles.size() == 1 ? dto : EventsDTO.none(), 3);
+
+        bus.emit(persisted("persisted-key"));
+        bus.emit(quarantined("quarantined-key"));
+        scheduler.runCycle();
+        scheduler.runCycle();
+
+        assertThat(cycles.get(1).persisted).containsExactly("persisted-key");
+        assertThat(cycles.get(1).quarantined).containsExactly("quarantined-key");
+        assertThat(reported).isEmpty();
+    }
+
+    @Test
+    void execute_eventStillNotAppliedAfterTheMaximumAttempts_isReportedAndNotRetried() {
+        start(dto -> dto, 2);
+
+        bus.emit(persisted("persisted-key"));
+        scheduler.runCycle();
+        scheduler.runCycle();
+        scheduler.runCycle();
+
+        assertThat(cycles.get(1).persisted).containsExactly("persisted-key");
+        assertThat(cycles.get(2).persisted).isEmpty();
+        assertThat(reported).singleElement().satisfies(exception -> assertThat(exception)
+                .hasMessageContaining("persisted-key")
+                .hasMessageContaining("2 attempts"));
+    }
+
+    @Test
+    void execute_eventAppliedOnItsSecondAttempt_isNotReported() {
+        start(dto -> cycles.size() == 1 ? dto : EventsDTO.none(), 2);
+
+        bus.emit(persisted("persisted-key"));
+        scheduler.runCycle();
+        scheduler.runCycle();
+        scheduler.runCycle();
+
+        assertThat(reported).isEmpty();
+    }
+
+    private void start(JanitorCycle extra) {
+        start(extra, 3);
+    }
+
+    private void start(JanitorCycle extra, int maxInboxUpdateAttempts) {
+        JanitorCycle recording = dto -> {
             try {
                 cycles.add(new Cycle(dto));
             } catch (RuntimeException e) {
                 failures.add(e);
                 throw e;
             }
-            extra.handle(dto);
+            return extra.run(dto);
         };
         PollingConfiguration configuration =
                 new PollingConfiguration(scheduler, PollingPolicy.every(Duration.ofSeconds(1)));
-        new PollingJanitorStrategy(status -> List.of(), bus, recording, configuration)
+        ErrorRouter errorRouter = new ErrorRouter().orElse((exception, context) -> reported.add(exception));
+        new PollingJanitorStrategy(status -> List.of(), bus, recording, configuration, maxInboxUpdateAttempts, errorRouter)
                 .execute(CancellationToken.create());
     }
 
