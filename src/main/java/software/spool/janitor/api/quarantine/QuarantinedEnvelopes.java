@@ -1,6 +1,7 @@
 package software.spool.janitor.api.quarantine;
 
 import software.spool.core.adapter.logging.LoggerFactory;
+import software.spool.core.exception.DataLakeWriteException;
 import software.spool.core.model.EnvelopeStatus;
 import software.spool.core.model.event.EnvelopePersisted;
 import software.spool.core.model.event.EnvelopePurged;
@@ -14,8 +15,10 @@ import software.spool.core.model.vo.Envelope;
 import software.spool.core.model.vo.EventMetadata;
 import software.spool.core.model.vo.EventMetadataKey;
 import software.spool.core.model.vo.IdempotencyKey;
+import software.spool.core.model.vo.PartitionKey;
 import software.spool.core.port.bus.EventPublisher;
-import software.spool.core.port.datalake.BronzeWriter;
+import software.spool.core.model.vo.PartitionedEnvelope;
+import software.spool.core.port.datalake.DataLakeWriter;
 import software.spool.core.port.inbox.InboxEnvelopeRemover;
 import software.spool.core.port.inbox.InboxUpdater;
 import software.spool.core.port.logging.Logger;
@@ -47,15 +50,15 @@ public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublishe
 
     private final InboxUpdater updater;
     private final InboxEnvelopeRemover remover;
-    private final Optional<BronzeWriter> bronzeWriter;
+    private final Optional<DataLakeWriter> dataLakeWriter;
     private final QuarantineRepository quarantineRepository;
     private final EventPublisher publisher;
 
-    private QuarantinedEnvelopes(InboxUpdater updater, InboxEnvelopeRemover remover, Optional<BronzeWriter> bronzeWriter,
+    private QuarantinedEnvelopes(InboxUpdater updater, InboxEnvelopeRemover remover, Optional<DataLakeWriter> dataLakeWriter,
                                  QuarantineRepository quarantineRepository, EventPublisher publisher) {
         this.updater = updater;
         this.remover = remover;
-        this.bronzeWriter = bronzeWriter;
+        this.dataLakeWriter = dataLakeWriter;
         this.quarantineRepository = quarantineRepository;
         this.publisher = publisher;
     }
@@ -63,9 +66,9 @@ public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublishe
     /**
      * Resolves envelopes from the inbox and from bronze.
      */
-    public static QuarantinedEnvelopes of(InboxUpdater updater, InboxEnvelopeRemover remover, BronzeWriter bronzeWriter,
+    public static QuarantinedEnvelopes of(InboxUpdater updater, InboxEnvelopeRemover remover, DataLakeWriter dataLakeWriter,
                                           QuarantineRepository quarantineRepository, EventPublisher publisher) {
-        return new QuarantinedEnvelopes(updater, remover, Optional.of(bronzeWriter), quarantineRepository, publisher);
+        return new QuarantinedEnvelopes(updater, remover, Optional.of(dataLakeWriter), quarantineRepository, publisher);
     }
 
     /**
@@ -159,13 +162,22 @@ public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublishe
                         .build());
             }
             case QuarantineLocation.Bronze bronze -> {
-                bronzeWriter.orElseThrow().save(bronze.partition(), envelope);
+                writeBackToTheDataLake(bronze.partition(), envelope);
                 publisher.publish(EnvelopePersisted.builder()
                         .correlationId(envelope.metadata().get(EventMetadataKey.CORRELATION_ID))
                         .idempotencyKey(envelope.idempotencyKey())
                         .partitionKey(bronze.partition())
                         .build());
             }
+        }
+    }
+
+    private void writeBackToTheDataLake(PartitionKey partition, Envelope envelope) {
+        boolean written = dataLakeWriter.orElseThrow().write(List.of(new PartitionedEnvelope(partition, envelope)))
+                .anyMatch(envelope.idempotencyKey()::equals);
+        if (!written) {
+            throw new DataLakeWriteException("envelope " + envelope.idempotencyKey().value()
+                    + " could not be written back to partition " + partition.value());
         }
     }
 
@@ -177,7 +189,7 @@ public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublishe
                 LOG.warn("Skipped {}: it is not in quarantine", idempotencyKey.value());
             } else if (found.get().status() != QuarantineStatus.PENDING) {
                 LOG.warn("Skipped {}: its quarantine is already {}", idempotencyKey.value(), found.get().status());
-            } else if (!stayedInTheInbox(found.get()) && bronzeWriter.isEmpty()) {
+            } else if (!stayedInTheInbox(found.get()) && dataLakeWriter.isEmpty()) {
                 LOG.warn("Skipped {}: it stayed in bronze, and this janitor has no data lake to write it back to",
                         idempotencyKey.value());
             } else {

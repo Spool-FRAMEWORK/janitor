@@ -1,7 +1,7 @@
 package software.spool.janitor.api.builder;
 
 import org.junit.jupiter.api.Test;
-import software.spool.core.adapter.memory.InMemoryBronze;
+import software.spool.core.adapter.memory.InMemoryDataLake;
 import software.spool.core.adapter.memory.InMemoryQuarantineRepository;
 import software.spool.core.model.EnvelopeStatus;
 import software.spool.core.model.Event;
@@ -179,18 +179,18 @@ class PollingJanitorBuilderTest {
     }
 
     @Test
-    void create_withABronzeWriter_givesQuarantinedEnvelopesThatRewriteBronze() {
+    void create_withADataLakeWriter_givesQuarantinedEnvelopesThatRewriteTheDataLake() {
         InMemoryQuarantineRepository repository = new InMemoryQuarantineRepository();
-        InMemoryBronze bronze = new InMemoryBronze();
+        InMemoryDataLake dataLake = new InMemoryDataLake();
         PartitionKey partition = PartitionKey.ofEntriesWithoutDate().with("source", "boe").build();
         Envelope persisted = envelope("rejected-by-the-mounter");
         repository.save(QuarantinedRecord.pending(persisted, QuarantineLocation.bronze(partition), QuarantineReason.VALIDATION_FAILED,
                 List.of(), Instant.now()));
 
-        Janitor janitor = builder().quarantineIn(repository).rewriteBronzeIn(bronze).create();
+        Janitor janitor = builder().quarantineIn(repository).rewriteDataLakeWith(dataLake).create();
 
         assertThat(janitor.quarantinedEnvelopes().republish(List.of(persisted.idempotencyKey()))).containsExactly(persisted.idempotencyKey());
-        assertThat(bronze.find(partition, persisted.idempotencyKey())).isPresent();
+        assertThat(dataLake.find(partition, persisted.idempotencyKey())).isPresent();
     }
 
     private static PipelineContext emptyCycle() {
