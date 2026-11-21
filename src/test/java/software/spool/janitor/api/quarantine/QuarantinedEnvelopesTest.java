@@ -1,7 +1,7 @@
 package software.spool.janitor.api.quarantine;
 
 import org.junit.jupiter.api.Test;
-import software.spool.core.adapter.memory.InMemoryBronzeRepository;
+import software.spool.core.adapter.memory.InMemoryBronze;
 import software.spool.core.adapter.memory.InMemoryQuarantineRepository;
 import software.spool.core.model.EnvelopeStatus;
 import software.spool.core.model.Event;
@@ -44,7 +44,7 @@ class QuarantinedEnvelopesTest {
             .with("source", "boe").build();
 
     private final InMemoryQuarantineRepository repository = new InMemoryQuarantineRepository();
-    private final InMemoryBronzeRepository bronze = new InMemoryBronzeRepository();
+    private final InMemoryBronze bronze = new InMemoryBronze();
     private final List<Event> published = new ArrayList<>();
     private final EventPublisher publisher = new EventPublisher() {
         @Override
@@ -232,7 +232,7 @@ class QuarantinedEnvelopesTest {
     }
 
     @Test
-    void republishAndPurge_recordThatStayedInBronzeWithoutABronzeRepository_skipItAndLeaveItPending() {
+    void republishAndPurge_recordThatStayedInBronzeWithoutABronzeWriter_skipItAndLeaveItPending() {
         QuarantinedEnvelopes withoutBronze = QuarantinedEnvelopes.of(inbox, inbox, repository, publisher);
         repository.save(pendingRecord(envelope(EnvelopeStatus.PERSISTED), QuarantineLocation.bronze(PARTITION)));
 

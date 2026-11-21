@@ -11,7 +11,7 @@ import software.spool.core.port.decorator.SafeInboxUpdater;
 import software.spool.core.port.inbox.InboxEnvelopeRemover;
 import software.spool.core.port.inbox.InboxStatusQuery;
 import software.spool.core.port.inbox.InboxUpdater;
-import software.spool.core.port.datalake.BronzeRepository;
+import software.spool.core.port.datalake.BronzeWriter;
 import software.spool.core.port.quarantine.QuarantineRepository;
 import software.spool.janitor.api.quarantine.QuarantinedEnvelopes;
 import software.spool.core.adapter.otel.OpenTelemetryMetricsRegistry;
@@ -36,7 +36,7 @@ public class PollingJanitorBuilder {
     private InboxUpdater updater;
     private InboxEnvelopeRemover remover;
     private QuarantineRepository quarantineRepository;
-    private BronzeRepository bronzeRepository;
+    private BronzeWriter bronzeWriter;
     private EventPublisher publisher;
     private EventSubscriber subscriber;
     private PollingConfiguration pollingConfiguration;
@@ -83,11 +83,11 @@ public class PollingJanitorBuilder {
      * Sets the bronze layer where envelopes rejected by the mounter are written back when their quarantine is
      * resolved. Without it, those quarantine records cannot be resolved by this janitor.
      *
-     * @param bronzeRepository the bronze layer of the data lake
+     * @param bronzeWriter the bronze layer of the data lake
      * @return this builder
      */
-    public PollingJanitorBuilder rewriteBronzeIn(BronzeRepository bronzeRepository) {
-        this.bronzeRepository = bronzeRepository;
+    public PollingJanitorBuilder rewriteBronzeIn(BronzeWriter bronzeWriter) {
+        this.bronzeWriter = bronzeWriter;
         return this;
     }
 
@@ -172,7 +172,7 @@ public class PollingJanitorBuilder {
     }
 
     private QuarantinedEnvelopes quarantinedEnvelopes() {
-        return Optional.ofNullable(bronzeRepository)
+        return Optional.ofNullable(bronzeWriter)
                 .map(bronze -> QuarantinedEnvelopes.of(updater, remover, bronze, quarantineRepository, publisher))
                 .orElseGet(() -> QuarantinedEnvelopes.of(updater, remover, quarantineRepository, publisher));
     }

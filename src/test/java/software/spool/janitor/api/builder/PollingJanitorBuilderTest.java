@@ -1,7 +1,7 @@
 package software.spool.janitor.api.builder;
 
 import org.junit.jupiter.api.Test;
-import software.spool.core.adapter.memory.InMemoryBronzeRepository;
+import software.spool.core.adapter.memory.InMemoryBronze;
 import software.spool.core.adapter.memory.InMemoryQuarantineRepository;
 import software.spool.core.model.EnvelopeStatus;
 import software.spool.core.model.Event;
@@ -179,9 +179,9 @@ class PollingJanitorBuilderTest {
     }
 
     @Test
-    void create_withABronzeRepository_givesQuarantinedEnvelopesThatRewriteBronze() {
+    void create_withABronzeWriter_givesQuarantinedEnvelopesThatRewriteBronze() {
         InMemoryQuarantineRepository repository = new InMemoryQuarantineRepository();
-        InMemoryBronzeRepository bronze = new InMemoryBronzeRepository();
+        InMemoryBronze bronze = new InMemoryBronze();
         PartitionKey partition = PartitionKey.ofEntriesWithoutDate().with("source", "boe").build();
         Envelope persisted = envelope("rejected-by-the-mounter");
         repository.save(QuarantinedRecord.pending(persisted, QuarantineLocation.bronze(partition), QuarantineReason.VALIDATION_FAILED,
