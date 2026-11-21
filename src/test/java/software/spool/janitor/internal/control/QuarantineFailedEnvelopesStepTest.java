@@ -8,6 +8,7 @@ import software.spool.core.model.failure.EnvelopeQuarantined;
 import software.spool.core.model.quarantine.QuarantineLocation;
 import software.spool.core.model.quarantine.QuarantineReason;
 import software.spool.core.model.quarantine.QuarantineResolution;
+import software.spool.core.model.quarantine.Resolver;
 import software.spool.core.model.quarantine.QuarantineStatus;
 import software.spool.core.model.quarantine.QuarantinedRecord;
 import software.spool.core.model.vo.Envelope;
@@ -67,7 +68,7 @@ class QuarantineFailedEnvelopesStepTest {
     void apply_keyWithAResolvedRecord_reopensItWithASecondEntry() throws AttributeNotFoundException {
         inbox.with(capturedEnvelope());
         repository.save(QuarantinedRecord.pending(capturedEnvelope(), QuarantineLocation.inbox(),
-                QuarantineReason.VALIDATION_FAILED, List.of(), Instant.now()).resolve(QuarantineResolution.republished(Instant.now())));
+                QuarantineReason.VALIDATION_FAILED, List.of(), Instant.now()).resolve(QuarantineResolution.republished(Instant.now(), Resolver.identified("ana", "people"))));
 
         step.apply(cycleWith(quarantined(QuarantineReason.RETRIES_EXHAUSTED, List.of())));
 

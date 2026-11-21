@@ -18,6 +18,7 @@
   - [Custom Polling Interval](#custom-polling-interval)
   - [Watchdog Integration](#watchdog-integration)
   - [Custom Error Routing](#custom-error-routing)
+- [Quarantine API](#quarantine-api)
 - [Key Concepts](#key-concepts)
 - [License](#license)
 
@@ -172,6 +173,26 @@ Janitor janitor = JanitorBuilderFactory.polling()
         .withMillisecondsThreshold(60_000)
         .withMillisecondsTtl(3_600_000)
         .withErrorRouter(errorRouter)
+        .create();
+```
+
+---
+
+## Quarantine API
+
+What is in quarantine is resolved by a person. With `serveQuarantineOverHttp(authenticator, roles, pageSizes)` on
+the builder, the janitor serves on its node's HTTP server an API to list the quarantine page by page, show a record
+with its envelope and its history, and republish, amend, let through or purge it. Each operation needs its role, and
+each resolution keeps who made it, as the authenticator identified the caller. Of two resolutions of the same record
+at once, only one is done; the other gets `409`. The contract is
+[`quarantine-api.yaml`](src/main/resources/openapi/quarantine-api.yaml) (ADR-014).
+
+```java
+Janitor janitor = JanitorBuilderFactory.polling()
+        // ...
+        .serveQuarantineOverHttp(authenticator,
+                new QuarantineRoles("quarantine-reader", "quarantine-resolver", "quarantine-bypasser"),
+                new QuarantinePageSizes(100, 1000))
         .create();
 ```
 

@@ -1,6 +1,10 @@
 package software.spool.janitor.api.quarantine;
 
 import software.spool.core.adapter.logging.LoggerFactory;
+import software.spool.core.model.quarantine.Resolver;
+import software.spool.core.model.quarantine.QuarantinePageRequest;
+import software.spool.core.model.quarantine.QuarantinePage;
+import software.spool.core.exception.QuarantineConflictException;
 import software.spool.core.exception.DataLakeWriteException;
 import software.spool.core.model.EnvelopeStatus;
 import software.spool.core.model.event.EnvelopePersisted;
@@ -43,9 +47,15 @@ import java.util.Optional;
  * The inbox is never touched for an envelope that stayed in bronze. A bypass sends it back the same way, with the
  * {@code VALIDATION_BYPASS} metadata.
  * </p>
+ *
+ * <p>
+ * Every resolution keeps who made it. A record is claimed first, by saving it resolved only if it is still pending,
+ * and then its envelope is sent back: of two resolutions of the same record at once, only one sends it back. If
+ * sending it back fails, the record is pending again.
+ * </p>
  */
 public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublisher, QuarantinedEnvelopeBypasser,
-        QuarantinedEnvelopePurger {
+        QuarantinedEnvelopePurger, QuarantinedEnvelopeFinder {
     private static final Logger LOG = LoggerFactory.getLogger(QuarantinedEnvelopes.class);
 
     private final InboxUpdater updater;
@@ -80,76 +90,104 @@ public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublishe
     }
 
     @Override
-    public Collection<IdempotencyKey> republish(Collection<IdempotencyKey> idempotencyKeys) {
-        List<QuarantinedRecord> pending = resolvable(idempotencyKeys);
-        if (pending.isEmpty()) return List.of();
-        Instant now = Instant.now();
-        List<QuarantinedRecord> fromTheInbox = pending.stream().filter(QuarantinedEnvelopes::stayedInTheInbox).toList();
-        if (!fromTheInbox.isEmpty()) updater.update(keysOf(fromTheInbox), EnvelopeStatus.CAPTURED);
-        pending.forEach(quarantinedRecord -> {
-            Envelope envelope = quarantinedRecord.envelope();
-            sendBack(quarantinedRecord, envelope, now);
-            quarantineRepository.save(quarantinedRecord.resolve(QuarantineResolution.republished(now)));
-            publisher.publish(republishedEventOf(envelope, envelope.idempotencyKey(), EnvelopeRepublished.Resolution.UNCHANGED));
-        });
-        LOG.info("Republished {} envelopes from quarantine", pending.size());
-        return keysOf(pending);
+    public Optional<QuarantinedRecord> find(IdempotencyKey idempotencyKey) {
+        return quarantineRepository.find(idempotencyKey);
     }
 
     @Override
-    public Optional<IdempotencyKey> republish(IdempotencyKey idempotencyKey, byte[] correctedPayload) {
+    public QuarantinePage list(QuarantinePageRequest request) {
+        return quarantineRepository.findByStatus(request);
+    }
+
+    @Override
+    public Collection<IdempotencyKey> republish(Collection<IdempotencyKey> idempotencyKeys, Resolver resolver) {
+        List<IdempotencyKey> republished = new ArrayList<>();
+        for (QuarantinedRecord quarantinedRecord : resolvable(idempotencyKeys)) {
+            Instant now = Instant.now();
+            Envelope envelope = quarantinedRecord.envelope();
+            boolean claimed = claimAndThen(quarantinedRecord, QuarantineResolution.republished(now, resolver), () -> {
+                if (stayedInTheInbox(quarantinedRecord)) updater.update(List.of(envelope.idempotencyKey()), EnvelopeStatus.CAPTURED);
+                sendBack(quarantinedRecord, envelope, now);
+            });
+            if (!claimed) continue;
+            publisher.publish(republishedEventOf(envelope, envelope.idempotencyKey(), EnvelopeRepublished.Resolution.UNCHANGED));
+            republished.add(envelope.idempotencyKey());
+        }
+        if (!republished.isEmpty()) LOG.info("Republished {} envelopes from quarantine", republished.size());
+        return republished;
+    }
+
+    @Override
+    public Optional<IdempotencyKey> republish(IdempotencyKey idempotencyKey, byte[] correctedPayload, Resolver resolver) {
         Optional<QuarantinedRecord> pending = resolvable(List.of(idempotencyKey)).stream().findFirst();
         if (pending.isEmpty()) return Optional.empty();
         QuarantinedRecord quarantinedRecord = pending.get();
         Envelope original = quarantinedRecord.envelope();
         IdempotencyKey correctedKey = IdempotencyKey.of(sourceOf(original), correctedPayload);
         if (correctedKey.equals(idempotencyKey)) {
-            return republish(List.of(idempotencyKey)).stream().findFirst();
+            return republish(List.of(idempotencyKey), resolver).stream().findFirst();
         }
         Instant now = Instant.now();
         Envelope corrected = new Envelope(correctedKey, correctedMetadataOf(original), original.mediaType(), correctedPayload,
                 original.status(), 0, now, now);
-        sendBack(quarantinedRecord, corrected, now);
-        if (stayedInTheInbox(quarantinedRecord)) remover.remove(List.of(idempotencyKey));
-        quarantineRepository.save(quarantinedRecord.resolve(QuarantineResolution.corrected(now, correctedKey)));
+        boolean claimed = claimAndThen(quarantinedRecord, QuarantineResolution.corrected(now, correctedKey, resolver), () -> {
+            sendBack(quarantinedRecord, corrected, now);
+            if (stayedInTheInbox(quarantinedRecord)) remover.remove(List.of(idempotencyKey));
+        });
+        if (!claimed) return Optional.empty();
         publisher.publish(republishedEventOf(original, correctedKey, EnvelopeRepublished.Resolution.CORRECTED));
         LOG.info("Republished {} from quarantine as {} with a corrected payload", idempotencyKey.value(), correctedKey.value());
         return Optional.of(correctedKey);
     }
 
     @Override
-    public Optional<IdempotencyKey> bypass(IdempotencyKey idempotencyKey, String reason) {
+    public Optional<IdempotencyKey> bypass(IdempotencyKey idempotencyKey, String reason, Resolver resolver) {
         Instant now = Instant.now();
-        QuarantineResolution bypassed = QuarantineResolution.bypassed(now, reason);
+        QuarantineResolution bypassed = QuarantineResolution.bypassed(now, reason, resolver);
         Optional<QuarantinedRecord> pending = resolvable(List.of(idempotencyKey)).stream().findFirst();
         if (pending.isEmpty()) return Optional.empty();
         QuarantinedRecord quarantinedRecord = pending.get();
         Envelope original = quarantinedRecord.envelope();
         Envelope marked = new Envelope(original.idempotencyKey(), bypassedMetadataOf(original, reason), original.mediaType(),
                 original.payload(), original.status(), original.retries(), original.capturedAt(), now);
-        sendBack(quarantinedRecord, marked, now);
-        quarantineRepository.save(quarantinedRecord.resolve(bypassed));
+        if (!claimAndThen(quarantinedRecord, bypassed, () -> sendBack(quarantinedRecord, marked, now))) return Optional.empty();
         publisher.publish(republishedEventOf(original, idempotencyKey, EnvelopeRepublished.Resolution.BYPASSED));
         LOG.warn("Republished {} from quarantine with a validation bypass: {}", idempotencyKey.value(), reason);
         return Optional.of(idempotencyKey);
     }
 
     @Override
-    public Collection<IdempotencyKey> purge(Collection<IdempotencyKey> idempotencyKeys) {
-        List<QuarantinedRecord> pending = resolvable(idempotencyKeys);
-        if (pending.isEmpty()) return List.of();
-        List<IdempotencyKey> fromTheInbox = keysOf(pending.stream().filter(QuarantinedEnvelopes::stayedInTheInbox).toList());
-        if (!fromTheInbox.isEmpty()) remover.remove(fromTheInbox);
-        Instant now = Instant.now();
-        pending.forEach(quarantinedRecord -> {
-            quarantineRepository.save(quarantinedRecord.resolve(QuarantineResolution.purged(now)));
+    public Collection<IdempotencyKey> purge(Collection<IdempotencyKey> idempotencyKeys, Resolver resolver) {
+        List<IdempotencyKey> purged = new ArrayList<>();
+        for (QuarantinedRecord quarantinedRecord : resolvable(idempotencyKeys)) {
+            boolean claimed = claimAndThen(quarantinedRecord, QuarantineResolution.purged(Instant.now(), resolver), () -> {
+                if (stayedInTheInbox(quarantinedRecord)) remover.remove(List.of(quarantinedRecord.idempotencyKey()));
+            });
+            if (!claimed) continue;
             publisher.publish(EnvelopePurged.builder()
                     .correlationId(quarantinedRecord.envelope().metadata().get(EventMetadataKey.CORRELATION_ID))
                     .idempotencyKey(quarantinedRecord.idempotencyKey())
                     .build());
-        });
-        LOG.warn("Purged {} envelopes from quarantine", pending.size());
-        return keysOf(pending);
+            purged.add(quarantinedRecord.idempotencyKey());
+        }
+        if (!purged.isEmpty()) LOG.warn("Purged {} envelopes from quarantine", purged.size());
+        return purged;
+    }
+
+    private boolean claimAndThen(QuarantinedRecord pending, QuarantineResolution resolution, Runnable sendBack) {
+        try {
+            quarantineRepository.resolve(pending.resolve(resolution));
+        } catch (QuarantineConflictException e) {
+            LOG.warn("Skipped {}: {}", pending.idempotencyKey().value(), e.getMessage());
+            return false;
+        }
+        try {
+            sendBack.run();
+            return true;
+        } catch (RuntimeException e) {
+            quarantineRepository.save(pending);
+            throw e;
+        }
     }
 
     private void sendBack(QuarantinedRecord quarantinedRecord, Envelope envelope, Instant now) {

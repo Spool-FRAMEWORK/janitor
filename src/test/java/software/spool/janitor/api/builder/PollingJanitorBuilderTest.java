@@ -1,5 +1,6 @@
 package software.spool.janitor.api.builder;
 
+import software.spool.core.model.quarantine.Resolver;
 import org.junit.jupiter.api.Test;
 import software.spool.core.adapter.memory.InMemoryDataLake;
 import software.spool.core.adapter.memory.InMemoryQuarantineRepository;
@@ -119,8 +120,8 @@ class PollingJanitorBuilderTest {
     void pipeline_withAQuarantineRetention_deletesOnlyTheRecordsResolvedLongerAgo() {
         InMemoryQuarantineRepository repository = new InMemoryQuarantineRepository();
         Instant longAgo = Instant.now().minus(Duration.ofDays(60));
-        repository.save(record("resolved-long-ago", longAgo).resolve(QuarantineResolution.purged(longAgo)));
-        repository.save(record("resolved-recently", longAgo).resolve(QuarantineResolution.republished(Instant.now())));
+        repository.save(record("resolved-long-ago", longAgo).resolve(QuarantineResolution.purged(longAgo, Resolver.identified("ana", "people"))));
+        repository.save(record("resolved-recently", longAgo).resolve(QuarantineResolution.republished(Instant.now(), Resolver.identified("ana", "people"))));
         repository.save(record("pending-long-ago", longAgo));
         PollingJanitorBuilder builder = builder()
                 .quarantineIn(repository)
@@ -136,7 +137,7 @@ class PollingJanitorBuilderTest {
     void pipeline_withoutAQuarantineRetention_keepsTheResolvedRecords() {
         InMemoryQuarantineRepository repository = new InMemoryQuarantineRepository();
         Instant longAgo = Instant.now().minus(Duration.ofDays(3650));
-        repository.save(record("resolved-long-ago", longAgo).resolve(QuarantineResolution.purged(longAgo)));
+        repository.save(record("resolved-long-ago", longAgo).resolve(QuarantineResolution.purged(longAgo, Resolver.identified("ana", "people"))));
 
         builder().quarantineIn(repository).initializePipeline((value, attributes) -> {}).execute(emptyCycle());
 
@@ -189,7 +190,7 @@ class PollingJanitorBuilderTest {
 
         Janitor janitor = builder().quarantineIn(repository).rewriteDataLakeWith(dataLake).create();
 
-        assertThat(janitor.quarantinedEnvelopes().republish(List.of(persisted.idempotencyKey()))).containsExactly(persisted.idempotencyKey());
+        assertThat(janitor.quarantinedEnvelopes().republish(List.of(persisted.idempotencyKey()), Resolver.identified("ana", "people"))).containsExactly(persisted.idempotencyKey());
         assertThat(dataLake.find(partition, persisted.idempotencyKey())).isPresent();
     }
 

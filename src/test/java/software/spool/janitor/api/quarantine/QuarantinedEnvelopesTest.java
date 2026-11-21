@@ -1,5 +1,6 @@
 package software.spool.janitor.api.quarantine;
 
+import software.spool.core.model.quarantine.Resolver;
 import org.junit.jupiter.api.Test;
 import software.spool.core.adapter.memory.InMemoryDataLake;
 import software.spool.core.adapter.memory.InMemoryQuarantineRepository;
@@ -60,7 +61,7 @@ class QuarantinedEnvelopesTest {
     void republish_quarantinedEnvelope_returnsItToCapturedWithoutRetries() {
         inQuarantine(envelope(EnvelopeStatus.QUARANTINED));
 
-        assertThat(quarantinedEnvelopes.republish(List.of(KEY))).containsExactly(KEY);
+        assertThat(quarantinedEnvelopes.republish(List.of(KEY), Resolver.identified("ana", "people"))).containsExactly(KEY);
 
         Envelope republished = inbox.stored("k1").orElseThrow();
         assertThat(republished.status()).isEqualTo(EnvelopeStatus.CAPTURED);
@@ -68,10 +69,45 @@ class QuarantinedEnvelopesTest {
     }
 
     @Test
+    void republish_quarantinedEnvelope_keepsWhoRepublishedIt() {
+        inQuarantine(envelope(EnvelopeStatus.QUARANTINED));
+
+        quarantinedEnvelopes.republish(List.of(KEY), Resolver.identified("luis", "people"));
+
+        assertThat(repository.find(KEY).orElseThrow().resolution())
+                .isInstanceOfSatisfying(QuarantineResolution.Republished.class,
+                        republished -> assertThat(republished.by()).isEqualTo(Resolver.identified("luis", "people")));
+    }
+
+    @Test
+    void republish_recordAnotherResolutionClaimedFirst_isSkippedAndItsEnvelopeIsNotSentBack() {
+        inQuarantine(envelope(EnvelopeStatus.QUARANTINED));
+        QuarantinedRecord pending = repository.find(KEY).orElseThrow();
+        repository.resolve(pending.resolve(QuarantineResolution.purged(Instant.now(), Resolver.identified("luis", "people"))));
+
+        assertThat(quarantinedEnvelopes.republish(List.of(KEY), Resolver.identified("ana", "people"))).isEmpty();
+
+        assertThat(repository.find(KEY).orElseThrow().status()).isEqualTo(QuarantineStatus.PURGED);
+        assertThat(inbox.stored("k1").orElseThrow().status()).isEqualTo(EnvelopeStatus.QUARANTINED);
+        assertThat(published).isEmpty();
+    }
+
+    @Test
+    void republish_whenSendingTheEnvelopeBackFails_leavesTheRecordPending() {
+        repository.save(pendingRecord(envelope(EnvelopeStatus.QUARANTINED), QuarantineLocation.bronze(PARTITION)));
+        QuarantinedEnvelopes withAFailingDataLake = QuarantinedEnvelopes.of(inbox, inbox, items -> Stream.empty(), repository, publisher);
+
+        assertThatThrownBy(() -> withAFailingDataLake.republish(List.of(KEY), Resolver.identified("ana", "people")))
+                .isInstanceOf(DataLakeWriteException.class);
+
+        assertThat(repository.find(KEY).orElseThrow().status()).isEqualTo(QuarantineStatus.PENDING);
+    }
+
+    @Test
     void republish_envelopeTheTtlAlreadyRemovedFromTheInbox_writesItBackAsCaptured() {
         repository.save(pendingRecord(envelope(EnvelopeStatus.QUARANTINED), QuarantineLocation.inbox()));
 
-        assertThat(quarantinedEnvelopes.republish(List.of(KEY))).containsExactly(KEY);
+        assertThat(quarantinedEnvelopes.republish(List.of(KEY), Resolver.identified("ana", "people"))).containsExactly(KEY);
 
         Envelope republished = inbox.stored("k1").orElseThrow();
         assertThat(republished.status()).isEqualTo(EnvelopeStatus.CAPTURED);
@@ -83,7 +119,7 @@ class QuarantinedEnvelopesTest {
     void republish_quarantinedEnvelope_marksItsRecordRepublishedAndPublishesStoredAndRepublished() {
         inQuarantine(envelope(EnvelopeStatus.QUARANTINED));
 
-        quarantinedEnvelopes.republish(List.of(KEY));
+        quarantinedEnvelopes.republish(List.of(KEY), Resolver.identified("ana", "people"));
 
         QuarantinedRecord quarantinedRecord = repository.find(KEY).orElseThrow();
         assertThat(quarantinedRecord.status()).isEqualTo(QuarantineStatus.REPUBLISHED);
@@ -103,7 +139,7 @@ class QuarantinedEnvelopesTest {
         inQuarantine(envelope(EnvelopeStatus.QUARANTINED));
         IdempotencyKey correctedKey = IdempotencyKey.of("boe", CORRECTED_PAYLOAD);
 
-        Optional<IdempotencyKey> republished = quarantinedEnvelopes.republish(KEY, CORRECTED_PAYLOAD);
+        Optional<IdempotencyKey> republished = quarantinedEnvelopes.republish(KEY, CORRECTED_PAYLOAD, Resolver.identified("ana", "people"));
 
         assertThat(republished).contains(correctedKey);
         Envelope corrected = inbox.stored(correctedKey.value()).orElseThrow();
@@ -119,7 +155,7 @@ class QuarantinedEnvelopesTest {
         inQuarantine(envelope(EnvelopeStatus.QUARANTINED));
         IdempotencyKey correctedKey = IdempotencyKey.of("boe", CORRECTED_PAYLOAD);
 
-        quarantinedEnvelopes.republish(KEY, CORRECTED_PAYLOAD);
+        quarantinedEnvelopes.republish(KEY, CORRECTED_PAYLOAD, Resolver.identified("ana", "people"));
 
         assertThat(inbox.stored("k1")).isEmpty();
         assertThat(repository.find(KEY).orElseThrow().resolution())
@@ -139,7 +175,7 @@ class QuarantinedEnvelopesTest {
     void purge_quarantinedEnvelope_deletesItMarksItsRecordPurgedAndPublishesPurged() {
         inQuarantine(envelope(EnvelopeStatus.QUARANTINED));
 
-        assertThat(quarantinedEnvelopes.purge(List.of(KEY))).containsExactly(KEY);
+        assertThat(quarantinedEnvelopes.purge(List.of(KEY), Resolver.identified("ana", "people"))).containsExactly(KEY);
 
         assertThat(inbox.stored("k1")).isEmpty();
         assertThat(repository.find(KEY)).map(QuarantinedRecord::status).contains(QuarantineStatus.PURGED);
@@ -152,9 +188,9 @@ class QuarantinedEnvelopesTest {
         Envelope captured = envelope(EnvelopeStatus.CAPTURED);
         inbox.with(captured);
 
-        assertThat(quarantinedEnvelopes.republish(List.of(KEY))).isEmpty();
-        assertThat(quarantinedEnvelopes.republish(KEY, CORRECTED_PAYLOAD)).isEmpty();
-        assertThat(quarantinedEnvelopes.purge(List.of(KEY))).isEmpty();
+        assertThat(quarantinedEnvelopes.republish(List.of(KEY), Resolver.identified("ana", "people"))).isEmpty();
+        assertThat(quarantinedEnvelopes.republish(KEY, CORRECTED_PAYLOAD, Resolver.identified("ana", "people"))).isEmpty();
+        assertThat(quarantinedEnvelopes.purge(List.of(KEY), Resolver.identified("ana", "people"))).isEmpty();
 
         assertThat(inbox.stored("k1")).contains(captured);
         assertThat(published).isEmpty();
@@ -163,10 +199,10 @@ class QuarantinedEnvelopesTest {
     @Test
     void republishAndPurge_recordAlreadyResolved_skipItAndPublishNothing() {
         repository.save(pendingRecord(envelope(EnvelopeStatus.QUARANTINED), QuarantineLocation.inbox())
-                .resolve(QuarantineResolution.purged(Instant.now())));
+                .resolve(QuarantineResolution.purged(Instant.now(), Resolver.identified("ana", "people"))));
 
-        assertThat(quarantinedEnvelopes.republish(List.of(KEY))).isEmpty();
-        assertThat(quarantinedEnvelopes.purge(List.of(KEY))).isEmpty();
+        assertThat(quarantinedEnvelopes.republish(List.of(KEY), Resolver.identified("ana", "people"))).isEmpty();
+        assertThat(quarantinedEnvelopes.purge(List.of(KEY), Resolver.identified("ana", "people"))).isEmpty();
 
         assertThat(inbox.stored("k1")).isEmpty();
         assertThat(published).isEmpty();
@@ -178,7 +214,7 @@ class QuarantinedEnvelopesTest {
         inbox.with(persisted);
         repository.save(pendingRecord(persisted, QuarantineLocation.bronze(PARTITION)));
 
-        assertThat(quarantinedEnvelopes.republish(List.of(KEY))).containsExactly(KEY);
+        assertThat(quarantinedEnvelopes.republish(List.of(KEY), Resolver.identified("ana", "people"))).containsExactly(KEY);
 
         assertThat(dataLake.find(PARTITION, KEY)).map(Envelope::payload).contains(persisted.payload());
         assertThat(inbox.stored("k1")).contains(persisted);
@@ -189,7 +225,7 @@ class QuarantinedEnvelopesTest {
     void republish_recordThatStayedInBronze_publishesPersistedForItsPartitionAndRepublished() {
         repository.save(pendingRecord(envelope(EnvelopeStatus.PERSISTED), QuarantineLocation.bronze(PARTITION)));
 
-        quarantinedEnvelopes.republish(List.of(KEY));
+        quarantinedEnvelopes.republish(List.of(KEY), Resolver.identified("ana", "people"));
 
         assertThat(published).hasSize(2);
         assertThat(published.get(0)).isInstanceOfSatisfying(EnvelopePersisted.class, event -> {
@@ -206,7 +242,7 @@ class QuarantinedEnvelopesTest {
                 repository, publisher);
         repository.save(pendingRecord(envelope(EnvelopeStatus.PERSISTED), QuarantineLocation.bronze(PARTITION)));
 
-        assertThatThrownBy(() -> withADataLakeThatDoesNotWrite.republish(List.of(KEY)))
+        assertThatThrownBy(() -> withADataLakeThatDoesNotWrite.republish(List.of(KEY), Resolver.identified("ana", "people")))
                 .isInstanceOf(DataLakeWriteException.class)
                 .hasMessageContaining("k1");
         assertThat(repository.find(KEY)).map(QuarantinedRecord::status).contains(QuarantineStatus.PENDING);
@@ -218,7 +254,7 @@ class QuarantinedEnvelopesTest {
         repository.save(pendingRecord(envelope(EnvelopeStatus.PERSISTED), QuarantineLocation.bronze(PARTITION)));
         IdempotencyKey correctedKey = IdempotencyKey.of("boe", CORRECTED_PAYLOAD);
 
-        assertThat(quarantinedEnvelopes.republish(KEY, CORRECTED_PAYLOAD)).contains(correctedKey);
+        assertThat(quarantinedEnvelopes.republish(KEY, CORRECTED_PAYLOAD, Resolver.identified("ana", "people"))).contains(correctedKey);
 
         Envelope corrected = dataLake.find(PARTITION, correctedKey).orElseThrow();
         assertThat(corrected.payload()).isEqualTo(CORRECTED_PAYLOAD);
@@ -239,7 +275,7 @@ class QuarantinedEnvelopesTest {
         inbox.with(persisted);
         repository.save(pendingRecord(persisted, QuarantineLocation.bronze(PARTITION)));
 
-        assertThat(quarantinedEnvelopes.purge(List.of(KEY))).containsExactly(KEY);
+        assertThat(quarantinedEnvelopes.purge(List.of(KEY), Resolver.identified("ana", "people"))).containsExactly(KEY);
 
         assertThat(inbox.stored("k1")).contains(persisted);
         assertThat(repository.find(KEY)).map(QuarantinedRecord::status).contains(QuarantineStatus.PURGED);
@@ -251,9 +287,9 @@ class QuarantinedEnvelopesTest {
         QuarantinedEnvelopes withoutBronze = QuarantinedEnvelopes.of(inbox, inbox, repository, publisher);
         repository.save(pendingRecord(envelope(EnvelopeStatus.PERSISTED), QuarantineLocation.bronze(PARTITION)));
 
-        assertThat(withoutBronze.republish(List.of(KEY))).isEmpty();
-        assertThat(withoutBronze.republish(KEY, CORRECTED_PAYLOAD)).isEmpty();
-        assertThat(withoutBronze.purge(List.of(KEY))).isEmpty();
+        assertThat(withoutBronze.republish(List.of(KEY), Resolver.identified("ana", "people"))).isEmpty();
+        assertThat(withoutBronze.republish(KEY, CORRECTED_PAYLOAD, Resolver.identified("ana", "people"))).isEmpty();
+        assertThat(withoutBronze.purge(List.of(KEY), Resolver.identified("ana", "people"))).isEmpty();
 
         assertThat(inbox.stored("k1")).isEmpty();
         assertThat(repository.find(KEY)).map(QuarantinedRecord::status).contains(QuarantineStatus.PENDING);
@@ -264,7 +300,7 @@ class QuarantinedEnvelopesTest {
     void bypass_recordThatStayedInTheInbox_returnsItAsCapturedWithTheMark() {
         inQuarantine(envelope(EnvelopeStatus.QUARANTINED));
 
-        assertThat(quarantinedEnvelopes.bypass(KEY, BYPASS_REASON)).contains(KEY);
+        assertThat(quarantinedEnvelopes.bypass(KEY, BYPASS_REASON, Resolver.identified("ana", "people"))).contains(KEY);
 
         Envelope bypassed = inbox.stored("k1").orElseThrow();
         assertThat(bypassed.status()).isEqualTo(EnvelopeStatus.CAPTURED);
@@ -277,7 +313,7 @@ class QuarantinedEnvelopesTest {
     void bypass_recordThatStayedInTheInbox_marksItBypassedWithItsReasonAndPublishesStoredAndRepublished() {
         inQuarantine(envelope(EnvelopeStatus.QUARANTINED));
 
-        quarantinedEnvelopes.bypass(KEY, BYPASS_REASON);
+        quarantinedEnvelopes.bypass(KEY, BYPASS_REASON, Resolver.identified("ana", "people"));
 
         assertThat(repository.find(KEY).orElseThrow().resolution())
                 .isInstanceOfSatisfying(QuarantineResolution.Bypassed.class,
@@ -296,7 +332,7 @@ class QuarantinedEnvelopesTest {
         inbox.with(persisted);
         repository.save(pendingRecord(persisted, QuarantineLocation.bronze(PARTITION)));
 
-        assertThat(quarantinedEnvelopes.bypass(KEY, BYPASS_REASON)).contains(KEY);
+        assertThat(quarantinedEnvelopes.bypass(KEY, BYPASS_REASON, Resolver.identified("ana", "people"))).contains(KEY);
 
         Envelope bypassed = dataLake.find(PARTITION, KEY).orElseThrow();
         assertThat(bypassed.status()).isEqualTo(EnvelopeStatus.PERSISTED);
@@ -313,7 +349,7 @@ class QuarantinedEnvelopesTest {
     void bypass_blankReason_failsAndLeavesTheRecordPending() {
         inQuarantine(envelope(EnvelopeStatus.QUARANTINED));
 
-        assertThatThrownBy(() -> quarantinedEnvelopes.bypass(KEY, " "))
+        assertThatThrownBy(() -> quarantinedEnvelopes.bypass(KEY, " ", Resolver.identified("ana", "people")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("reason");
 
@@ -323,7 +359,7 @@ class QuarantinedEnvelopesTest {
 
     @Test
     void bypass_keyWithoutPendingRecord_skipsItAndPublishesNothing() {
-        assertThat(quarantinedEnvelopes.bypass(KEY, BYPASS_REASON)).isEmpty();
+        assertThat(quarantinedEnvelopes.bypass(KEY, BYPASS_REASON, Resolver.identified("ana", "people"))).isEmpty();
 
         assertThat(published).isEmpty();
     }

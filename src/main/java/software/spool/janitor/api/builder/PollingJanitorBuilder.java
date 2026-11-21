@@ -13,7 +13,12 @@ import software.spool.core.port.inbox.InboxStatusQuery;
 import software.spool.core.port.inbox.InboxUpdater;
 import software.spool.core.port.datalake.DataLakeWriter;
 import software.spool.core.port.quarantine.QuarantineRepository;
+import software.spool.core.port.authentication.RequestAuthenticator;
+import software.spool.janitor.api.quarantine.QuarantinePageSizes;
+import software.spool.janitor.api.quarantine.QuarantineRoles;
+import software.spool.janitor.api.quarantine.QuarantineServer;
 import software.spool.janitor.api.quarantine.QuarantinedEnvelopes;
+import software.spool.janitor.internal.adapter.input.http.HttpQuarantineServer;
 import software.spool.core.adapter.otel.OpenTelemetryMetricsRegistry;
 import software.spool.core.port.metrics.MetricsRegistry;
 import software.spool.core.port.metrics.SpoolMetrics;
@@ -31,6 +36,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 public class PollingJanitorBuilder {
+    private Optional<QuarantineServerSettings> quarantineServerSettings = Optional.empty();
     private final ModuleHeartBeat heartBeat;
     private InboxStatusQuery reader;
     private InboxUpdater updater;
@@ -166,9 +172,28 @@ public class PollingJanitorBuilder {
         return this;
     }
 
+    /**
+     * Serves the review and the resolution of the quarantine over the node's HTTP server, each call identified by
+     * the authenticator and checked against its role (ADR-014). Without it, the janitor serves no routes.
+     */
+    public PollingJanitorBuilder serveQuarantineOverHttp(RequestAuthenticator authenticator, QuarantineRoles roles,
+                                                         QuarantinePageSizes pageSizes) {
+        this.quarantineServerSettings = Optional.of(new QuarantineServerSettings(authenticator, roles, pageSizes));
+        return this;
+    }
+
     public Janitor create() {
         Objects.requireNonNull(quarantineRepository, "QuarantineRepository required");
-        return new Janitor(initializeStrategy(), getErrorRouter(), heartBeat, quarantinedEnvelopes());
+        QuarantinedEnvelopes quarantinedEnvelopes = quarantinedEnvelopes();
+        QuarantineServer quarantineServer = quarantineServerSettings
+                .<QuarantineServer>map(settings -> new HttpQuarantineServer(quarantinedEnvelopes, quarantinedEnvelopes,
+                        quarantinedEnvelopes, quarantinedEnvelopes, settings.authenticator(), settings.roles(), settings.pageSizes()))
+                .orElseGet(QuarantineServer::none);
+        return new Janitor(initializeStrategy(), getErrorRouter(), heartBeat, quarantinedEnvelopes, quarantineServer);
+    }
+
+    private record QuarantineServerSettings(RequestAuthenticator authenticator, QuarantineRoles roles,
+                                            QuarantinePageSizes pageSizes) {
     }
 
     private QuarantinedEnvelopes quarantinedEnvelopes() {

@@ -1,5 +1,7 @@
 package software.spool.janitor.api;
 
+import software.spool.core.port.http.HttpRoute;
+import software.spool.janitor.api.quarantine.QuarantineServer;
 import software.spool.janitor.api.quarantine.QuarantinedEnvelopes;
 
 import software.spool.core.model.spool.SpoolModule;
@@ -11,6 +13,7 @@ import software.spool.core.utils.routing.ErrorRouter;
 import software.spool.janitor.api.builder.JanitorBuilderFactory;
 import software.spool.janitor.api.strategy.JanitorStrategy;
 
+import java.util.Collection;
 import java.util.Objects;
 
 /**
@@ -48,6 +51,7 @@ public class Janitor implements SpoolModule {
     private final ErrorRouter errorRouter;
     private final ModuleHeartBeat heartBeat;
     private final QuarantinedEnvelopes quarantinedEnvelopes;
+    private final QuarantineServer quarantineServer;
 
     /**
      * Creates a new {@code Feeder} with the given strategy and error router.
@@ -59,6 +63,15 @@ public class Janitor implements SpoolModule {
      */
     public Janitor(JanitorStrategy strategy, ErrorRouter errorRouter, ModuleHeartBeat heartBeat,
                    QuarantinedEnvelopes quarantinedEnvelopes) {
+        this(strategy, errorRouter, heartBeat, quarantinedEnvelopes, QuarantineServer.none());
+    }
+
+    /**
+     * @param quarantineServer the routes that review and resolve the quarantine over HTTP
+     */
+    public Janitor(JanitorStrategy strategy, ErrorRouter errorRouter, ModuleHeartBeat heartBeat,
+                   QuarantinedEnvelopes quarantinedEnvelopes, QuarantineServer quarantineServer) {
+        this.quarantineServer = Objects.requireNonNull(quarantineServer);
         this.strategy = Objects.requireNonNull(strategy);
         this.errorRouter = Objects.requireNonNull(errorRouter);
         this.heartBeat = heartBeat;
@@ -119,6 +132,11 @@ public class Janitor implements SpoolModule {
     /**
      * What is in quarantine, to republish, correct or purge it.
      */
+    @Override
+    public Collection<HttpRoute> routes() {
+        return quarantineServer.routes();
+    }
+
     public QuarantinedEnvelopes quarantinedEnvelopes() {
         return quarantinedEnvelopes;
     }

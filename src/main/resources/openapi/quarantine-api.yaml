@@ -1,0 +1,246 @@
+openapi: 3.0.3
+info:
+  title: Spool quarantine API
+  version: 1.0.0
+  description: >
+    Review and resolve what a janitor keeps in quarantine (ADR-014). The janitor serves it on its node's HTTP server
+    when its descriptor has a quarantineServer block. Every call is identified by the authentication provider that
+    block names, and each operation needs the role the block gives it: read, resolve or bypass.
+paths:
+  /spool/quarantine:
+    get:
+      summary: List the records in a status, page by page, in the order of their keys
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [PENDING, REPUBLISHED, CORRECTED, BYPASSED, PURGED]
+            default: PENDING
+        - name: limit
+          in: query
+          description: Records per page; by default and at most, what the quarantineServer block says.
+          schema:
+            type: integer
+            minimum: 1
+        - name: cursor
+          in: query
+          description: The next value of the previous page.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: One page of records.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarantinePage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/NotIdentified'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /spool/quarantine/{key}:
+    parameters:
+      - $ref: '#/components/parameters/Key'
+    get:
+      summary: One record with its envelope and its history
+      responses:
+        '200':
+          $ref: '#/components/responses/Record'
+        '404':
+          $ref: '#/components/responses/NotInQuarantine'
+  /spool/quarantine/{key}/republish:
+    parameters:
+      - $ref: '#/components/parameters/Key'
+    post:
+      summary: Send the envelope back as it was (role resolve)
+      responses:
+        '200':
+          $ref: '#/components/responses/Record'
+        '404':
+          $ref: '#/components/responses/NotInQuarantine'
+        '409':
+          $ref: '#/components/responses/AlreadyResolved'
+  /spool/quarantine/{key}/amend:
+    parameters:
+      - $ref: '#/components/parameters/Key'
+    post:
+      summary: Send back a new envelope with the payload of the body, which says which one it comes from (role resolve)
+      requestBody:
+        required: true
+        description: The amended payload, as it is, in the media type of the envelope.
+        content:
+          '*/*':
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          $ref: '#/components/responses/Record'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotInQuarantine'
+        '409':
+          $ref: '#/components/responses/AlreadyResolved'
+  /spool/quarantine/{key}/bypass:
+    parameters:
+      - $ref: '#/components/parameters/Key'
+    post:
+      summary: Let the envelope through although a validator rejected it (role bypass)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          $ref: '#/components/responses/Record'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotInQuarantine'
+        '409':
+          $ref: '#/components/responses/AlreadyResolved'
+  /spool/quarantine/{key}/purge:
+    parameters:
+      - $ref: '#/components/parameters/Key'
+    post:
+      summary: Discard the envelope for good (role resolve)
+      responses:
+        '200':
+          $ref: '#/components/responses/Record'
+        '404':
+          $ref: '#/components/responses/NotInQuarantine'
+        '409':
+          $ref: '#/components/responses/AlreadyResolved'
+components:
+  parameters:
+    Key:
+      name: key
+      in: path
+      required: true
+      description: The idempotency key of the envelope.
+      schema:
+        type: string
+  responses:
+    Record:
+      description: The record, after the operation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/QuarantinedRecord'
+    BadRequest:
+      description: The request lacks what the operation needs, or a value is not valid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotIdentified:
+      description: The authentication provider could not tell who sent the request.
+    Forbidden:
+      description: The caller does not have the role the operation needs.
+    NotInQuarantine:
+      description: The key is not in quarantine.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    AlreadyResolved:
+      description: The record was already resolved, also when someone else resolved it at the same time.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+    QuarantinePage:
+      type: object
+      properties:
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuarantinedRecord'
+        next:
+          type: string
+          nullable: true
+          description: The cursor of the next page, or null on the last one.
+    QuarantinedRecord:
+      type: object
+      properties:
+        key:
+          type: string
+        status:
+          type: string
+        location:
+          type: object
+          properties:
+            place:
+              type: string
+              enum: [INBOX, BRONZE]
+            partition:
+              type: string
+              nullable: true
+        envelope:
+          type: object
+          properties:
+            metadata:
+              type: object
+              additionalProperties:
+                type: string
+            mediaType:
+              type: string
+            payload:
+              type: string
+            payloadEncoding:
+              type: string
+              enum: [utf-8, base64]
+        history:
+          type: array
+          items:
+            type: object
+            properties:
+              reason:
+                type: string
+              violations:
+                type: array
+                items:
+                  type: string
+              quarantinedAt:
+                type: string
+                format: date-time
+              resolution:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  at:
+                    type: string
+                    format: date-time
+                    nullable: true
+                  by:
+                    type: object
+                    nullable: true
+                    description: Who resolved it; null for a stay resolved before resolvers were kept.
+                    properties:
+                      subject:
+                        type: string
+                      provider:
+                        type: string
+                  reason:
+                    type: string
+                    nullable: true
+                  amendedTo:
+                    type: string
+                    nullable: true
