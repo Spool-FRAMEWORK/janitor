@@ -14,6 +14,7 @@ import software.spool.janitor.api.builder.JanitorBuilderFactory;
 import software.spool.janitor.api.strategy.JanitorStrategy;
 
 import java.util.Collection;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -126,7 +127,7 @@ public class Janitor implements SpoolModule {
 
     @Override
     public ModuleHealthPayload checkHealth() {
-        return token.isActive() ? ModuleHealthPayload.healthy(heartBeat.identity().moduleId()) : ModuleHealthPayload.degraded(heartBeat.identity().moduleId(), null);
+        return token.isActive() ? ModuleHealthPayload.healthy(heartBeat.identity().moduleId()) : ModuleHealthPayload.degraded(heartBeat.identity().moduleId(), List.of());
     }
 
     /**

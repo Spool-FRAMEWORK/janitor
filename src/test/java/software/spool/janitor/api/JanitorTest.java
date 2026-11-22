@@ -55,6 +55,7 @@ class JanitorTest {
     @Test
     void checkHealth_whenStopped_returnsDegraded() {
         assertThat(janitor.checkHealth().status()).isEqualTo(HealthStatus.DEGRADED);
+        assertThat(janitor.checkHealth().checks()).isNotNull().isEmpty();
     }
 
     @Test
