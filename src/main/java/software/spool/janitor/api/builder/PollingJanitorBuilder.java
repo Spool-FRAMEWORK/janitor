@@ -13,6 +13,7 @@ import software.spool.core.port.inbox.InboxStatusQuery;
 import software.spool.core.port.inbox.InboxUpdater;
 import software.spool.core.port.datalake.DataLakeWriter;
 import software.spool.core.port.quarantine.QuarantineRepository;
+import software.spool.core.port.quarantine.QuarantinedResultWriter;
 import software.spool.core.port.authentication.RequestAuthenticator;
 import software.spool.janitor.api.quarantine.QuarantinePageSizes;
 import software.spool.janitor.api.quarantine.QuarantineRoles;
@@ -32,6 +33,8 @@ import software.spool.janitor.internal.control.*;
 import software.spool.janitor.internal.port.decorator.SafeInboxStatusQuery;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -43,6 +46,7 @@ public class PollingJanitorBuilder {
     private InboxEnvelopeRemover remover;
     private QuarantineRepository quarantineRepository;
     private DataLakeWriter dataLakeWriter;
+    private final List<QuarantinedResultWriter> resultWriters = new ArrayList<>();
     private EventPublisher publisher;
     private EventSubscriber subscriber;
     private PollingConfiguration pollingConfiguration;
@@ -94,6 +98,19 @@ public class PollingJanitorBuilder {
      */
     public PollingJanitorBuilder rewriteDataLakeWith(DataLakeWriter dataLakeWriter) {
         this.dataLakeWriter = dataLakeWriter;
+        return this;
+    }
+
+    /**
+     * Adds the data mart where mount results that the mounter could not write are written when their quarantine is
+     * resolved. Called once per data mart; the results of a data mart without a writer cannot be resolved by this
+     * janitor.
+     *
+     * @param resultWriter writes to one data mart with the partitioning of the mount that fills it
+     * @return this builder
+     */
+    public PollingJanitorBuilder rewriteDataMartWith(QuarantinedResultWriter resultWriter) {
+        resultWriters.add(Objects.requireNonNull(resultWriter, "resultWriter is required"));
         return this;
     }
 
@@ -199,7 +216,8 @@ public class PollingJanitorBuilder {
     private QuarantinedEnvelopes quarantinedEnvelopes() {
         return Optional.ofNullable(dataLakeWriter)
                 .map(bronze -> QuarantinedEnvelopes.of(updater, remover, bronze, quarantineRepository, publisher))
-                .orElseGet(() -> QuarantinedEnvelopes.of(updater, remover, quarantineRepository, publisher));
+                .orElseGet(() -> QuarantinedEnvelopes.of(updater, remover, quarantineRepository, publisher))
+                .rewritingDataMartsWith(resultWriters);
     }
 
     private ErrorRouter getErrorRouter() {

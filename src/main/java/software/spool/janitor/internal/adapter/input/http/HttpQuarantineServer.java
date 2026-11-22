@@ -3,6 +3,7 @@ package software.spool.janitor.internal.adapter.input.http;
 import software.spool.core.adapter.jackson.PayloadDeserializerFactory;
 import software.spool.core.adapter.jackson.RecordSerializerFactory;
 import software.spool.core.exception.DeserializationException;
+import software.spool.core.exception.QuarantinedResultRejectedException;
 import software.spool.core.model.quarantine.QuarantinePageRequest;
 import software.spool.core.model.quarantine.QuarantineStatus;
 import software.spool.core.model.quarantine.QuarantinedRecord;
@@ -22,6 +23,7 @@ import software.spool.janitor.api.quarantine.QuarantinedEnvelopeBypasser;
 import software.spool.janitor.api.quarantine.QuarantinedEnvelopeFinder;
 import software.spool.janitor.api.quarantine.QuarantinedEnvelopePurger;
 import software.spool.janitor.api.quarantine.QuarantinedEnvelopeRepublisher;
+import software.spool.janitor.api.quarantine.ResolutionNotAllowedException;
 
 import java.util.Arrays;
 import java.util.Collection;
@@ -32,7 +34,8 @@ import java.util.stream.Collectors;
 
 /**
  * The quarantine API of ADR-014 on the node's HTTP server: six routes, each one checked with its role and handed to a
- * use case. A record that is not in quarantine answers {@code 404}, one already resolved {@code 409}, and a request
+ * use case. A record that is not in quarantine answers {@code 404}, one already resolved or that cannot be resolved
+ * that way {@code 409}, a mount result that still cannot be written to its data mart {@code 422}, and a request
  * without what it needs {@code 400}.
  */
 public final class HttpQuarantineServer implements QuarantineServer {
@@ -46,6 +49,7 @@ public final class HttpQuarantineServer implements QuarantineServer {
     private static final int BAD_REQUEST = 400;
     private static final int NOT_FOUND = 404;
     private static final int CONFLICT = 409;
+    private static final int UNPROCESSABLE = 422;
 
     private final QuarantinedEnvelopeFinder finder;
     private final QuarantinedEnvelopeRepublisher republisher;
@@ -123,8 +127,14 @@ public final class HttpQuarantineServer implements QuarantineServer {
         Optional<QuarantinedRecord> found = finder.find(key);
         if (found.isEmpty()) return notInQuarantine(key);
         if (found.get().status() != QuarantineStatus.PENDING) return alreadyResolved(found.get());
-        if (resolution.apply(key, resolverOf(caller)).isEmpty()) {
-            return finder.find(key).map(this::alreadyResolved).orElseGet(() -> notInQuarantine(key));
+        try {
+            if (resolution.apply(key, resolverOf(caller)).isEmpty()) {
+                return finder.find(key).map(this::alreadyResolved).orElseGet(() -> notInQuarantine(key));
+            }
+        } catch (ResolutionNotAllowedException e) {
+            return error(CONFLICT, e.getMessage());
+        } catch (QuarantinedResultRejectedException e) {
+            return error(UNPROCESSABLE, e.getMessage());
         }
         return json(OK, QuarantinedRecordPayload.of(finder.find(key).orElseThrow()));
     }

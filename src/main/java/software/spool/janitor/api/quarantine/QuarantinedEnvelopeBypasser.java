@@ -21,7 +21,8 @@ public interface QuarantinedEnvelopeBypasser {
      * @param reason         why the envelope is valid although a validator rejected it; required
      * @param resolver       who lets it through
      * @return the key of the envelope, or empty if it was not pending in quarantine
-     * @throws IllegalArgumentException if the reason is empty
+     * @throws IllegalArgumentException      if the reason is empty
+     * @throws ResolutionNotAllowedException if the envelope holds a mount result, which nothing validates
      */
     Optional<IdempotencyKey> bypass(IdempotencyKey idempotencyKey, String reason, Resolver resolver);
 }

@@ -1,5 +1,6 @@
 package software.spool.janitor.api.quarantine;
 
+import software.spool.core.exception.QuarantinedResultRejectedException;
 import software.spool.core.model.quarantine.Resolver;
 import software.spool.core.model.vo.IdempotencyKey;
 
@@ -22,6 +23,8 @@ public interface QuarantinedEnvelopeRepublisher {
      * @param idempotencyKeys the keys of the envelopes to republish
      * @param resolver        who republishes them
      * @return the keys that were republished
+     * @throws QuarantinedResultRejectedException if a mount result still cannot be written to its data mart; its
+     *                                            record stays pending
      */
     Collection<IdempotencyKey> republish(Collection<IdempotencyKey> idempotencyKeys, Resolver resolver);
 
@@ -33,6 +36,8 @@ public interface QuarantinedEnvelopeRepublisher {
      * @param correctedPayload the payload that replaces the original one
      * @param resolver         who amends it
      * @return the key of the new envelope, or empty if the envelope was not pending in quarantine
+     * @throws QuarantinedResultRejectedException if the amended mount result still cannot be written to its data
+     *                                            mart; its record stays pending
      */
     Optional<IdempotencyKey> republish(IdempotencyKey idempotencyKey, byte[] correctedPayload, Resolver resolver);
 }

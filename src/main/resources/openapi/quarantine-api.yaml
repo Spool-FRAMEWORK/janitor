@@ -63,6 +63,8 @@ paths:
           $ref: '#/components/responses/NotInQuarantine'
         '409':
           $ref: '#/components/responses/AlreadyResolved'
+        '422':
+          $ref: '#/components/responses/ResultRejected'
   /spool/quarantine/{key}/amend:
     parameters:
       - $ref: '#/components/parameters/Key'
@@ -85,11 +87,13 @@ paths:
           $ref: '#/components/responses/NotInQuarantine'
         '409':
           $ref: '#/components/responses/AlreadyResolved'
+        '422':
+          $ref: '#/components/responses/ResultRejected'
   /spool/quarantine/{key}/bypass:
     parameters:
       - $ref: '#/components/parameters/Key'
     post:
-      summary: Let the envelope through although a validator rejected it (role bypass)
+      summary: Let the envelope through although a validator rejected it (role bypass). A mount result cannot be let through and answers 409
       requestBody:
         required: true
         content:
@@ -154,7 +158,13 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
     AlreadyResolved:
-      description: The record was already resolved, also when someone else resolved it at the same time.
+      description: The record was already resolved, also when someone else resolved it at the same time, or it cannot be resolved that way, as letting a mount result through.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ResultRejected:
+      description: The record holds a mount result that still cannot be written to its data mart, for example because it lacks a partition attribute. The record stays pending.
       content:
         application/json:
           schema:
@@ -188,10 +198,15 @@ components:
           properties:
             place:
               type: string
-              enum: [INBOX, BRONZE]
+              enum: [INBOX, BRONZE, DATA_MART]
             partition:
               type: string
               nullable: true
+              description: The bronze partition the envelope stayed in, or the partition a mount result came with.
+            dataMart:
+              type: string
+              nullable: true
+              description: The data mart of a mount result, with its layer, such as gold/payments.
         envelope:
           type: object
           properties:

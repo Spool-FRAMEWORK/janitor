@@ -27,6 +27,7 @@ import software.spool.core.port.inbox.InboxEnvelopeRemover;
 import software.spool.core.port.inbox.InboxUpdater;
 import software.spool.core.port.logging.Logger;
 import software.spool.core.port.quarantine.QuarantineRepository;
+import software.spool.core.port.quarantine.QuarantinedResultWriter;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -34,6 +35,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -45,7 +47,8 @@ import java.util.Optional;
  * envelope back to where it stayed: an envelope from the inbox returns to the inbox as {@code CAPTURED}, and one
  * from bronze is written again to its bronze partition, followed by {@link EnvelopePersisted} so it is mounted again.
  * The inbox is never touched for an envelope that stayed in bronze. A bypass sends it back the same way, with the
- * {@code VALIDATION_BYPASS} metadata.
+ * {@code VALIDATION_BYPASS} metadata. An envelope that holds a mount result is written to its data mart with the
+ * {@link QuarantinedResultWriter} of that data mart; it cannot be let through, because nothing validates a data mart.
  * </p>
  *
  * <p>
@@ -61,14 +64,17 @@ public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublishe
     private final InboxUpdater updater;
     private final InboxEnvelopeRemover remover;
     private final Optional<DataLakeWriter> dataLakeWriter;
+    private final Map<String, QuarantinedResultWriter> resultWriters;
     private final QuarantineRepository quarantineRepository;
     private final EventPublisher publisher;
 
     private QuarantinedEnvelopes(InboxUpdater updater, InboxEnvelopeRemover remover, Optional<DataLakeWriter> dataLakeWriter,
-                                 QuarantineRepository quarantineRepository, EventPublisher publisher) {
+                                 Map<String, QuarantinedResultWriter> resultWriters, QuarantineRepository quarantineRepository,
+                                 EventPublisher publisher) {
         this.updater = updater;
         this.remover = remover;
         this.dataLakeWriter = dataLakeWriter;
+        this.resultWriters = resultWriters;
         this.quarantineRepository = quarantineRepository;
         this.publisher = publisher;
     }
@@ -78,7 +84,7 @@ public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublishe
      */
     public static QuarantinedEnvelopes of(InboxUpdater updater, InboxEnvelopeRemover remover, DataLakeWriter dataLakeWriter,
                                           QuarantineRepository quarantineRepository, EventPublisher publisher) {
-        return new QuarantinedEnvelopes(updater, remover, Optional.of(dataLakeWriter), quarantineRepository, publisher);
+        return new QuarantinedEnvelopes(updater, remover, Optional.of(dataLakeWriter), Map.of(), quarantineRepository, publisher);
     }
 
     /**
@@ -86,7 +92,24 @@ public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublishe
      */
     public static QuarantinedEnvelopes of(InboxUpdater updater, InboxEnvelopeRemover remover,
                                           QuarantineRepository quarantineRepository, EventPublisher publisher) {
-        return new QuarantinedEnvelopes(updater, remover, Optional.empty(), quarantineRepository, publisher);
+        return new QuarantinedEnvelopes(updater, remover, Optional.empty(), Map.of(), quarantineRepository, publisher);
+    }
+
+    /**
+     * Also resolves the mount results of the data marts these writers write to. The records of any other data mart
+     * are skipped.
+     *
+     * @throws IllegalArgumentException if two writers write to the same data mart
+     */
+    public QuarantinedEnvelopes rewritingDataMartsWith(Collection<QuarantinedResultWriter> resultWriters) {
+        Map<String, QuarantinedResultWriter> byDataMart = new HashMap<>();
+        for (QuarantinedResultWriter resultWriter : resultWriters) {
+            if (byDataMart.putIfAbsent(resultWriter.dataMart(), resultWriter) != null) {
+                throw new IllegalArgumentException("Two quarantined result writers write to the data mart "
+                        + resultWriter.dataMart() + "; each data mart takes only one");
+            }
+        }
+        return new QuarantinedEnvelopes(updater, remover, dataLakeWriter, Map.copyOf(byDataMart), quarantineRepository, publisher);
     }
 
     @Override
@@ -147,6 +170,10 @@ public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublishe
         Optional<QuarantinedRecord> pending = resolvable(List.of(idempotencyKey)).stream().findFirst();
         if (pending.isEmpty()) return Optional.empty();
         QuarantinedRecord quarantinedRecord = pending.get();
+        if (quarantinedRecord.location() instanceof QuarantineLocation.DataMart dataMart) {
+            throw new ResolutionNotAllowedException(idempotencyKey, idempotencyKey.value()
+                    + " is a mount result of " + dataMart.dataMart() + ", and a mount result cannot be let through: nothing validates a data mart");
+        }
         Envelope original = quarantinedRecord.envelope();
         Envelope marked = new Envelope(original.idempotencyKey(), bypassedMetadataOf(original, reason), original.mediaType(),
                 original.payload(), original.status(), original.retries(), original.capturedAt(), now);
@@ -199,6 +226,8 @@ public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublishe
                         .idempotencyKey(envelope.idempotencyKey())
                         .build());
             }
+            case QuarantineLocation.DataMart dataMart ->
+                    resultWriters.get(dataMart.dataMart()).write(dataMart.partition(), envelope.payload());
             case QuarantineLocation.Bronze bronze -> {
                 writeBackToTheDataLake(bronze.partition(), envelope);
                 publisher.publish(EnvelopePersisted.builder()
@@ -227,14 +256,30 @@ public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublishe
                 LOG.warn("Skipped {}: it is not in quarantine", idempotencyKey.value());
             } else if (found.get().status() != QuarantineStatus.PENDING) {
                 LOG.warn("Skipped {}: its quarantine is already {}", idempotencyKey.value(), found.get().status());
-            } else if (!stayedInTheInbox(found.get()) && dataLakeWriter.isEmpty()) {
-                LOG.warn("Skipped {}: it stayed in bronze, and this janitor has no data lake to write it back to",
-                        idempotencyKey.value());
+            } else if (!canSendBack(found.get())) {
+                LOG.warn("Skipped {}: {}", idempotencyKey.value(), whyItCannotBeSentBack(found.get().location()));
             } else {
                 selected.add(found.get());
             }
         }
         return selected;
+    }
+
+    private boolean canSendBack(QuarantinedRecord quarantinedRecord) {
+        return switch (quarantinedRecord.location()) {
+            case QuarantineLocation.Inbox inbox -> true;
+            case QuarantineLocation.Bronze bronze -> dataLakeWriter.isPresent();
+            case QuarantineLocation.DataMart dataMart -> resultWriters.containsKey(dataMart.dataMart());
+        };
+    }
+
+    private static String whyItCannotBeSentBack(QuarantineLocation location) {
+        return switch (location) {
+            case QuarantineLocation.Inbox inbox -> "it stayed in the inbox";
+            case QuarantineLocation.Bronze bronze -> "it stayed in bronze, and this janitor has no data lake to write it back to";
+            case QuarantineLocation.DataMart dataMart -> "it is a mount result of " + dataMart.dataMart()
+                    + ", and this janitor has no writer for that data mart";
+        };
     }
 
     private static boolean stayedInTheInbox(QuarantinedRecord quarantinedRecord) {

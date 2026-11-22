@@ -23,6 +23,8 @@ import software.spool.core.model.vo.IdempotencyKey;
 import software.spool.core.model.vo.MediaType;
 import software.spool.core.model.vo.PartitionKey;
 import software.spool.core.port.bus.EventPublisher;
+import software.spool.core.port.quarantine.QuarantinedResultWriter;
+import software.spool.janitor.api.fixture.FakeDataMart;
 import software.spool.janitor.api.fixture.FakeInbox;
 
 import java.nio.charset.StandardCharsets;
@@ -378,5 +380,14 @@ class QuarantinedEnvelopesTest {
         Instant capturedAt = Instant.now().minus(Duration.ofHours(1));
         return new Envelope(KEY, new EventMetadata().set(EventMetadataKey.SOURCE, "boe"), MediaType.of("application/json"),
                 "{\"price\":-1}".getBytes(StandardCharsets.UTF_8), status, 2, capturedAt, capturedAt);
+    }
+
+    @Test
+    void rewritingDataMartsWith_twoWritersOfTheSameDataMart_failsNamingIt() {
+        List<QuarantinedResultWriter> writers = List.of(new FakeDataMart("gold/payments", "country"), new FakeDataMart("gold/payments", "day"));
+
+        assertThatThrownBy(() -> quarantinedEnvelopes.rewritingDataMartsWith(writers))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("gold/payments");
     }
 }

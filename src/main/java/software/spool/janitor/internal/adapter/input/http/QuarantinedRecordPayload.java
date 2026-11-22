@@ -33,11 +33,13 @@ record QuarantinedRecordPayload(String key, String status, LocationPayload locat
                 quarantinedRecord.history().stream().map(StayPayload::of).toList());
     }
 
-    record LocationPayload(String place, Optional<String> partition) {
+    record LocationPayload(String place, Optional<String> partition, Optional<String> dataMart) {
         static LocationPayload of(QuarantineLocation location) {
             return switch (location) {
-                case QuarantineLocation.Inbox inbox -> new LocationPayload("INBOX", Optional.empty());
-                case QuarantineLocation.Bronze bronze -> new LocationPayload("BRONZE", Optional.of(bronze.partition().value()));
+                case QuarantineLocation.Inbox inbox -> new LocationPayload("INBOX", Optional.empty(), Optional.empty());
+                case QuarantineLocation.Bronze bronze -> new LocationPayload("BRONZE", Optional.of(bronze.partition().value()), Optional.empty());
+                case QuarantineLocation.DataMart dataMart -> new LocationPayload("DATA_MART", Optional.of(dataMart.partition().value()),
+                        Optional.of(dataMart.dataMart()));
             };
         }
     }
