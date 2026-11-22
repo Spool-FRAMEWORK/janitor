@@ -1,5 +1,6 @@
 package software.spool.janitor.api;
 
+import software.spool.core.port.health.HealthProvider;
 import software.spool.core.port.http.HttpRoute;
 import software.spool.janitor.api.quarantine.QuarantineServer;
 import software.spool.janitor.api.quarantine.QuarantinedEnvelopes;
@@ -76,6 +77,7 @@ public class Janitor implements SpoolModule {
         this.strategy = Objects.requireNonNull(strategy);
         this.errorRouter = Objects.requireNonNull(errorRouter);
         this.heartBeat = heartBeat;
+        heartBeat.reportFrom(this);
         this.quarantinedEnvelopes = Objects.requireNonNull(quarantinedEnvelopes);
         this.token  = CancellationToken.NOOP;
     }
@@ -123,6 +125,11 @@ public class Janitor implements SpoolModule {
         } catch (Exception e) {
             errorRouter.dispatch(e);
         }
+    }
+
+    @Override
+    public void reportHealthFrom(HealthProvider health) {
+        heartBeat.reportFrom(health);
     }
 
     @Override
