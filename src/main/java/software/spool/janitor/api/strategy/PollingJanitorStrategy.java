@@ -59,7 +59,7 @@ public class PollingJanitorStrategy implements JanitorStrategy {
                         LOG.error("Exception occurred while polling janitor strategy", e);
                     }
                 },
-                pollingConfiguration.policy(),
+                pollingConfiguration.schedule(),
                 token
         );
     }

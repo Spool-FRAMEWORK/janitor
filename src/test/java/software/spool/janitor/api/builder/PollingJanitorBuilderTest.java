@@ -12,6 +12,7 @@ import software.spool.core.model.quarantine.QuarantineReason;
 import software.spool.core.model.quarantine.QuarantineResolution;
 import software.spool.core.model.quarantine.QuarantineStatus;
 import software.spool.core.model.quarantine.QuarantinedRecord;
+import software.spool.core.model.schedule.Schedule;
 import software.spool.core.model.vo.Envelope;
 import software.spool.core.model.vo.EventMetadata;
 import software.spool.core.model.vo.IdempotencyKey;
@@ -83,7 +84,7 @@ class PollingJanitorBuilderTest {
                 .removeWith(mock(InboxEnvelopeRemover.class))
                 .on(mock(EventPublisher.class))
                 .subscribeWith(mock(EventSubscriber.class))
-                .every(Duration.ofSeconds(1));
+                .schedule(Schedule.every(Duration.ofSeconds(1)));
 
         assertThatThrownBy(builder::create)
                 .isInstanceOf(NullPointerException.class)
@@ -238,6 +239,6 @@ class PollingJanitorBuilderTest {
                 .on(mock(EventPublisher.class))
                 .subscribeWith(mock(EventSubscriber.class))
                 .quarantineIn(new InMemoryQuarantineRepository())
-                .every(Duration.ofSeconds(1));
+                .schedule(Schedule.every(Duration.ofSeconds(1)));
     }
 }

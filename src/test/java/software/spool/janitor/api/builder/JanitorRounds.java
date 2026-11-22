@@ -1,13 +1,13 @@
 package software.spool.janitor.api.builder;
 
 import software.spool.core.model.Event;
+import software.spool.core.model.schedule.Schedule;
 import software.spool.core.port.bus.EventPublisher;
 import software.spool.core.port.inbox.InboxUpdater;
 import software.spool.core.port.metrics.MetricsRegistry;
 import software.spool.core.port.quarantine.QuarantineRepository;
 import software.spool.core.utils.polling.CancellationToken;
 import software.spool.core.utils.polling.PollingConfiguration;
-import software.spool.core.utils.polling.PollingPolicy;
 import software.spool.core.utils.routing.ErrorRouter;
 import software.spool.janitor.api.fixture.DirectEventBus;
 import software.spool.janitor.api.fixture.FakeInbox;
@@ -40,13 +40,13 @@ public final class JanitorRounds {
                 .on(mock(EventPublisher.class))
                 .subscribeWith(bus)
                 .quarantineIn(quarantineRepository)
-                .every(Duration.ofSeconds(1));
+                .schedule(Schedule.every(Duration.ofSeconds(1)));
         JanitorScheduleHandler handler = new JanitorScheduleHandler(builder.initializePipeline((value, attributes) -> {}),
                 new ErrorRouter(), MetricsRegistry.NOOP.counter("completed", "", "1"),
                 MetricsRegistry.NOOP.counter("failed", "", "1"), MetricsRegistry.NOOP.timer("duration", "", "ms"));
         ErrorRouter errorRouter = new ErrorRouter().orElse((exception, context) -> reported.add(exception));
         new PollingJanitorStrategy(inbox, bus, handler,
-                new PollingConfiguration(scheduler, PollingPolicy.every(Duration.ofSeconds(1))),
+                new PollingConfiguration(scheduler, Schedule.every(Duration.ofSeconds(1))),
                 maxInboxUpdateAttempts, errorRouter).execute(CancellationToken.create());
     }
 

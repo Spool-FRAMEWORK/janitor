@@ -1,5 +1,6 @@
 package software.spool.janitor.api.builder;
 
+import software.spool.core.model.schedule.Schedule;
 import software.spool.core.pipeline.ObservedStep;
 import software.spool.core.pipeline.Pipeline;
 import software.spool.core.pipeline.PipelineContext;
@@ -124,8 +125,8 @@ public class PollingJanitorBuilder {
         return this;
     }
 
-    public PollingJanitorBuilder every(Duration interval) {
-        this.pollingConfiguration = PollingConfiguration.every(interval);
+    public PollingJanitorBuilder schedule(Schedule schedule) {
+        this.pollingConfiguration = PollingConfiguration.of(schedule);
         return this;
     }
 

@@ -5,6 +5,7 @@ import software.spool.core.model.Event;
 import software.spool.core.model.event.EnvelopePersisted;
 import software.spool.core.model.failure.EnvelopeQuarantined;
 import software.spool.core.model.quarantine.QuarantineReason;
+import software.spool.core.model.schedule.Schedule;
 import software.spool.core.model.vo.IdempotencyKey;
 import software.spool.core.model.vo.PartitionKey;
 import software.spool.core.port.bus.EventSubscriber;
@@ -12,7 +13,6 @@ import software.spool.core.port.bus.Handler;
 import software.spool.core.port.bus.Subscription;
 import software.spool.core.utils.polling.CancellationToken;
 import software.spool.core.utils.polling.PollingConfiguration;
-import software.spool.core.utils.polling.PollingPolicy;
 import software.spool.core.utils.polling.PollingScheduler;
 import software.spool.core.utils.routing.ErrorRouter;
 import software.spool.janitor.internal.control.EventsDTO;
@@ -157,7 +157,7 @@ class PollingJanitorStrategyTest {
             return extra.run(dto);
         };
         PollingConfiguration configuration =
-                new PollingConfiguration(scheduler, PollingPolicy.every(Duration.ofSeconds(1)));
+                new PollingConfiguration(scheduler, Schedule.every(Duration.ofSeconds(1)));
         ErrorRouter errorRouter = new ErrorRouter().orElse((exception, context) -> reported.add(exception));
         new PollingJanitorStrategy(status -> List.of(), bus, recording, configuration, maxInboxUpdateAttempts, errorRouter)
                 .execute(CancellationToken.create());
@@ -219,7 +219,7 @@ class PollingJanitorStrategyTest {
         private Runnable task;
 
         @Override
-        public void schedule(Runnable task, PollingPolicy policy, CancellationToken token) {
+        public void schedule(Runnable task, Schedule schedule, CancellationToken token) {
             this.task = task;
         }
 
