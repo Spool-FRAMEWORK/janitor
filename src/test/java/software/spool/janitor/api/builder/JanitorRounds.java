@@ -3,6 +3,7 @@ package software.spool.janitor.api.builder;
 import software.spool.core.model.Event;
 import software.spool.core.model.schedule.Schedule;
 import software.spool.core.port.bus.EventPublisher;
+import software.spool.core.port.idempotency.ProcessedKeyRepository;
 import software.spool.core.port.inbox.InboxUpdater;
 import software.spool.core.port.metrics.MetricsRegistry;
 import software.spool.core.port.quarantine.QuarantineRepository;
@@ -18,6 +19,7 @@ import software.spool.janitor.internal.control.JanitorScheduleHandler;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import static org.mockito.Mockito.mock;
 
@@ -31,7 +33,7 @@ public final class JanitorRounds {
     private final List<Exception> reported = new ArrayList<>();
 
     public JanitorRounds(FakeInbox inbox, InboxUpdater updater, QuarantineRepository quarantineRepository,
-                         int maxInboxUpdateAttempts) {
+                         int maxInboxUpdateAttempts, Optional<ProcessedKeyRepository> processedKeys) {
         PollingJanitorBuilder builder = JanitorBuilderFactory.watchdog(null, "janitor-test")
                 .polling()
                 .from(inbox)
@@ -41,6 +43,7 @@ public final class JanitorRounds {
                 .subscribeWith(bus)
                 .quarantineIn(quarantineRepository)
                 .schedule(Schedule.every(Duration.ofSeconds(1)));
+        processedKeys.ifPresent(builder::rememberProcessedKeysIn);
         JanitorScheduleHandler handler = new JanitorScheduleHandler(builder.initializePipeline((value, attributes) -> {}),
                 new ErrorRouter(), MetricsRegistry.NOOP.counter("completed", "", "1"),
                 MetricsRegistry.NOOP.counter("failed", "", "1"), MetricsRegistry.NOOP.timer("duration", "", "ms"));

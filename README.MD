@@ -209,12 +209,13 @@ Janitor janitor = JanitorBuilderFactory.polling()
 | **`InboxEnvelopeRemover`** | Interface to delete an envelope from the inbox. |
 | **`withMillisecondsThreshold`** | Envelopes stuck for longer than this are republished. |
 | **`withMillisecondsTtl`** | Envelopes older than this are removed permanently. |
+| **`rememberProcessedKeysFor`** | How long the janitor remembers the envelopes it marked as persisted, so a repeated `EnvelopePersisted` does not start their TTL again. 10 minutes by default, in the memory of the process; `rememberProcessedKeysIn` takes another `ProcessedKeyRepository`. |
 
 ### What the Janitor does each cycle
 
 | Step | Action |
 |---|---|
-| **UpdatePersisted** | Marks envelopes as `PERSISTED` once confirmed downstream. |
+| **UpdatePersisted** | Marks envelopes as `PERSISTED` once confirmed downstream, except those it already marked within its processed keys window. |
 | **QuarantineFailed** | Moves envelopes that exceeded retries to `QUARANTINED` status. |
 | **RemoveExpired** | Deletes envelopes older than the configured TTL. |
 | **RepublishStuck** | Re-publishes envelopes that have been `CAPTURED` for longer than the threshold. |

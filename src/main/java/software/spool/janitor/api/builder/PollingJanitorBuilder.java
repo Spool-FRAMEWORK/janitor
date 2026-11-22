@@ -1,5 +1,6 @@
 package software.spool.janitor.api.builder;
 
+import software.spool.core.adapter.memory.InMemoryProcessedKeyRepository;
 import software.spool.core.model.schedule.Schedule;
 import software.spool.core.pipeline.ObservedStep;
 import software.spool.core.pipeline.Pipeline;
@@ -9,6 +10,7 @@ import software.spool.core.port.bus.EventSubscriber;
 import software.spool.core.port.decorator.SafeEventPublisher;
 import software.spool.core.port.decorator.SafeEventSubscriber;
 import software.spool.core.port.decorator.SafeInboxUpdater;
+import software.spool.core.port.idempotency.ProcessedKeyRepository;
 import software.spool.core.port.inbox.InboxEnvelopeRemover;
 import software.spool.core.port.inbox.InboxStatusQuery;
 import software.spool.core.port.inbox.InboxUpdater;
@@ -58,6 +60,8 @@ public class PollingJanitorBuilder {
     private Long millisecondsQuarantineRetention;
     private Integer maxRetries;
     private Integer maxInboxUpdateAttempts;
+    private Duration processedKeysWindow = InMemoryProcessedKeyRepository.DEFAULT_WINDOW;
+    private Optional<ProcessedKeyRepository> processedKeys = Optional.empty();
     private final MetricsRegistry metricsRegistry = new OpenTelemetryMetricsRegistry();
 
     PollingJanitorBuilder(ModuleHeartBeat heartBeat) {
@@ -191,6 +195,21 @@ public class PollingJanitorBuilder {
     }
 
     /**
+     * How long the janitor remembers the keys it marked as persisted, so a repeated EnvelopePersisted does not start
+     * their TTL again (ADR-007). {@link InMemoryProcessedKeyRepository#DEFAULT_WINDOW} by default.
+     */
+    public PollingJanitorBuilder rememberProcessedKeysFor(Duration window) {
+        this.processedKeysWindow = Objects.requireNonNull(window);
+        return this;
+    }
+
+    /** Where the janitor remembers the keys it marked as persisted; in the memory of the process by default. */
+    public PollingJanitorBuilder rememberProcessedKeysIn(ProcessedKeyRepository processedKeys) {
+        this.processedKeys = Optional.of(processedKeys);
+        return this;
+    }
+
+    /**
      * Serves the review and the resolution of the quarantine over the node's HTTP server, each call identified by
      * the authenticator and checked against its role (ADR-014). Without it, the janitor serves no routes.
      */
@@ -240,7 +259,7 @@ public class PollingJanitorBuilder {
 
     Pipeline<PipelineContext, PipelineContext> initializePipeline(MetricsRegistry.CounterMetric recordsCleaned) {
         Pipeline<PipelineContext, PipelineContext> expiry = Pipeline.<PipelineContext>start()
-                .add(new ObservedStep<>("update-persisted", new UpdatePersistedEnvelopesStep(updater)))
+                .add(new ObservedStep<>("update-persisted", new UpdatePersistedEnvelopesStep(updater, processedKeys())))
                 .add(new ObservedStep<>("quarantine-envelopes", new QuarantineFailedEnvelopesStep(updater, quarantineRepository, recordsCleaned)))
                 .add(new ObservedStep<>("expired-envelopes",
                         new RemoveExpiredEnvelopesStep(getErrorRouter(), millis(millisecondsTtl), remover, reader, recordsCleaned)));
@@ -254,6 +273,10 @@ public class PollingJanitorBuilder {
         return withQuarantineRetention
                 .add(new ObservedStep<>("handle-stuck-envelopes",
                         new RepublishStuckEnvelopesStep(reader, updater, publisher, millis(millisecondsThreshold), Objects.requireNonNullElse(maxRetries, 3), recordsCleaned)));
+    }
+
+    private ProcessedKeyRepository processedKeys() {
+        return processedKeys.orElseGet(() -> InMemoryProcessedKeyRepository.remembering(processedKeysWindow));
     }
 
     /** A value that was not set stays null, and each step falls back to its own default. */

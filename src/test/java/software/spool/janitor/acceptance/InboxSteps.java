@@ -4,6 +4,7 @@ import io.cucumber.datatable.DataTable;
 import io.cucumber.java.en.Given;
 import io.cucumber.java.en.Then;
 import io.cucumber.java.en.When;
+import software.spool.core.adapter.memory.InMemoryProcessedKeyRepository;
 import software.spool.core.adapter.memory.InMemoryQuarantineRepository;
 import software.spool.core.model.EnvelopeStatus;
 import software.spool.core.model.event.EnvelopePersisted;
@@ -14,22 +15,32 @@ import software.spool.core.model.vo.EventMetadata;
 import software.spool.core.model.vo.IdempotencyKey;
 import software.spool.core.model.vo.MediaType;
 import software.spool.core.model.vo.PartitionKey;
+import software.spool.core.port.idempotency.ProcessedKeyRepository;
 import software.spool.janitor.api.builder.JanitorRounds;
 import software.spool.janitor.api.fixture.FakeInbox;
 import software.spool.janitor.api.fixture.FlakyInboxUpdater;
+import software.spool.janitor.api.fixture.MovableClock;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-public class InboxFailureSteps {
+public class InboxSteps {
     private final FakeInbox inbox = new FakeInbox();
     private final FlakyInboxUpdater updater = new FlakyInboxUpdater(inbox);
     private final InMemoryQuarantineRepository quarantineRepository = new InMemoryQuarantineRepository();
+    private final MovableClock clock = new MovableClock();
     private int maxInboxUpdateAttempts = 3;
+    private Optional<ProcessedKeyRepository> processedKeys = Optional.empty();
     private JanitorRounds janitor;
+
+    @Given("a janitor that remembers the keys it marked for {int} minutes")
+    public void aJanitorThatRemembers(int minutes) {
+        processedKeys = Optional.of(new InMemoryProcessedKeyRepository(Duration.ofMinutes(minutes), clock));
+    }
 
     @Given("the envelope {string} is captured in the inbox")
     public void theEnvelopeIsCaptured(String key) {
@@ -56,7 +67,7 @@ public class InboxFailureSteps {
         updater.failAlways(EnvelopeStatus.PERSISTED);
     }
 
-    @Given("the janitor tries each event {int} times")
+    @Given("the janitor tries each event {int} time(s)")
     public void theJanitorTriesEachEvent(int attempts) {
         maxInboxUpdateAttempts = attempts;
     }
@@ -81,6 +92,21 @@ public class InboxFailureSteps {
     @When("the janitor runs {int} round(s)")
     public void theJanitorRuns(int rounds) {
         janitor().run(rounds);
+    }
+
+    @When("{int} minutes pass")
+    public void minutesPass(int minutes) {
+        clock.advance(Duration.ofMinutes(minutes));
+    }
+
+    @Then("the inbox marked {string} as persisted once")
+    public void theInboxMarkedItOnce(String key) {
+        theInboxMarkedIt(key, 1);
+    }
+
+    @Then("the inbox marked {string} as persisted {int} times")
+    public void theInboxMarkedIt(String key, int times) {
+        assertThat(updater.timesMoved(IdempotencyKey.of(key), EnvelopeStatus.PERSISTED)).isEqualTo(times);
     }
 
     @Then("{string} is quarantined in the inbox")
@@ -110,7 +136,7 @@ public class InboxFailureSteps {
     }
 
     private JanitorRounds janitor() {
-        if (janitor == null) janitor = new JanitorRounds(inbox, updater, quarantineRepository, maxInboxUpdateAttempts);
+        if (janitor == null) janitor = new JanitorRounds(inbox, updater, quarantineRepository, maxInboxUpdateAttempts, processedKeys);
         return janitor;
     }
 
