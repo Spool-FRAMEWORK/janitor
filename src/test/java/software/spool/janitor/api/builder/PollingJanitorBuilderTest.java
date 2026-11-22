@@ -230,6 +230,11 @@ class PollingJanitorBuilderTest {
         return builder(status -> List.of());
     }
 
+    @Test
+    void withoutAWatchdog_janitorStillReportsTheGivenModuleId() {
+        assertThat(builder(status -> List.of()).create().checkHealth().moduleId()).isEqualTo("janitor-test");
+    }
+
     private static PollingJanitorBuilder builder(InboxStatusQuery inbox) {
         return JanitorBuilderFactory.watchdog(null, "janitor-test")
                 .polling()

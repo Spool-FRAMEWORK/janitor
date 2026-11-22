@@ -36,7 +36,7 @@ public class JanitorBuilderFactory {
 
     private static ModuleHeartBeat buildHeartbeat(String watchdogUrl, String moduleId) {
         return Objects.isNull(watchdogUrl) ?
-                ModuleHeartBeat.NOOP : new PollingHeartbeat(
+                ModuleHeartBeat.silent(ModuleIdentity.of(moduleId)) : new PollingHeartbeat(
                 new HttpWatchdogClient(watchdogUrl),
                 ModuleIdentity.of(moduleId)
         );
