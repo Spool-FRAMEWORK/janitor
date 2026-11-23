@@ -1,5 +1,6 @@
 package software.spool.janitor.api.strategy;
 
+import software.spool.core.model.event.QuarantinedEnvelopeReplaced;
 import software.spool.core.adapter.logging.LoggerFactory;
 import software.spool.core.exception.InboxUpdateException;
 import software.spool.core.model.Event;
@@ -15,6 +16,7 @@ import software.spool.core.utils.routing.ErrorRouter;
 import software.spool.janitor.internal.control.EventsDTO;
 import software.spool.janitor.internal.control.JanitorCycle;
 
+import java.util.function.Consumer;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -27,6 +29,7 @@ public class PollingJanitorStrategy implements JanitorStrategy {
     private final int maxInboxUpdateAttempts;
     private final ErrorRouter errorRouter;
     private final Map<String, Integer> attemptsByEventId = new HashMap<>();
+    private final Consumer<IdempotencyKey> replacedInQuarantine;
 
     /**
      * @param maxInboxUpdateAttempts how many rounds an event is tried before the janitor stops retrying it and reports
@@ -34,6 +37,17 @@ public class PollingJanitorStrategy implements JanitorStrategy {
      */
     public PollingJanitorStrategy(InboxStatusQuery reader, EventSubscriber subscriber, JanitorCycle cycle,
                                   PollingConfiguration pollingConfiguration, int maxInboxUpdateAttempts, ErrorRouter errorRouter) {
+        this(reader, subscriber, cycle, pollingConfiguration, maxInboxUpdateAttempts, errorRouter, key -> {
+        });
+    }
+
+    /**
+     * @param replacedInQuarantine what to do with the key of a quarantined envelope a new capture took the place of
+     *                             (ADR-032): resolving its quarantine as replaced
+     */
+    public PollingJanitorStrategy(InboxStatusQuery reader, EventSubscriber subscriber, JanitorCycle cycle,
+                                  PollingConfiguration pollingConfiguration, int maxInboxUpdateAttempts, ErrorRouter errorRouter,
+                                  Consumer<IdempotencyKey> replacedInQuarantine) {
         if (maxInboxUpdateAttempts < 1)
             throw new IllegalArgumentException("maxInboxUpdateAttempts must be at least 1, got " + maxInboxUpdateAttempts);
         this.subscriber = Objects.requireNonNull(subscriber);
@@ -41,6 +55,7 @@ public class PollingJanitorStrategy implements JanitorStrategy {
         this.pollingConfiguration = Objects.requireNonNullElse(pollingConfiguration, PollingConfiguration.every(Duration.ofSeconds(10)));
         this.maxInboxUpdateAttempts = maxInboxUpdateAttempts;
         this.errorRouter = Objects.requireNonNull(errorRouter);
+        this.replacedInQuarantine = Objects.requireNonNull(replacedInQuarantine);
     }
 
     @Override
@@ -49,6 +64,7 @@ public class PollingJanitorStrategy implements JanitorStrategy {
         Queue<EnvelopeQuarantined> quarantinedEnvelopes = new ConcurrentLinkedQueue<>();
         subscriber.subscribe(EnvelopePersisted.class, persistedEnvelopes::add);
         subscriber.subscribe (EnvelopeQuarantined.class, quarantinedEnvelopes::add);
+        subscriber.subscribe(QuarantinedEnvelopeReplaced.class, this::markReplaced);
         pollingConfiguration.scheduler().schedule(
                 () -> {
                     try {
@@ -62,6 +78,14 @@ public class PollingJanitorStrategy implements JanitorStrategy {
                 pollingConfiguration.schedule(),
                 token
         );
+    }
+
+    private void markReplaced(QuarantinedEnvelopeReplaced replaced) {
+        try {
+            replacedInQuarantine.accept(replaced.idempotencyKey());
+        } catch (RuntimeException e) {
+            errorRouter.dispatch(e);
+        }
     }
 
     /**

@@ -201,6 +201,29 @@ public final class QuarantinedEnvelopes implements QuarantinedEnvelopeRepublishe
         return purged;
     }
 
+    /**
+     * Resolves as replaced the pending quarantine of a key whose envelope a new capture took the place of in the inbox
+     * (ADR-032). The inbox is left as it is: it already holds the new envelope.
+     *
+     * @return whether a pending quarantine was resolved
+     */
+    public boolean markReplaced(IdempotencyKey idempotencyKey) {
+        Optional<QuarantinedRecord> pending = quarantineRepository.find(idempotencyKey)
+                .filter(quarantinedRecord -> quarantinedRecord.status() == QuarantineStatus.PENDING);
+        if (pending.isEmpty()) {
+            LOG.warn("Skipped marking {} as replaced: it has no pending quarantine", idempotencyKey.value());
+            return false;
+        }
+        try {
+            quarantineRepository.resolve(pending.get().resolve(QuarantineResolution.replaced(Instant.now())));
+        } catch (QuarantineConflictException e) {
+            LOG.warn("Skipped marking {} as replaced: {}", idempotencyKey.value(), e.getMessage());
+            return false;
+        }
+        LOG.info("The quarantine of {} was replaced by a new capture", idempotencyKey.value());
+        return true;
+    }
+
     private boolean claimAndThen(QuarantinedRecord pending, QuarantineResolution resolution, Runnable sendBack) {
         try {
             quarantineRepository.resolve(pending.resolve(resolution));

@@ -186,6 +186,30 @@ class QuarantinedEnvelopesTest {
     }
 
     @Test
+    void markReplaced_pendingRecord_isResolvedAsReplacedWithoutTouchingTheInboxOrPublishing() {
+        Envelope replacement = envelope(EnvelopeStatus.CAPTURED);
+        repository.save(pendingRecord(envelope(EnvelopeStatus.QUARANTINED), QuarantineLocation.inbox()));
+        inbox.with(replacement);
+
+        assertThat(quarantinedEnvelopes.markReplaced(KEY)).isTrue();
+
+        assertThat(repository.find(KEY)).map(QuarantinedRecord::status).contains(QuarantineStatus.REPLACED);
+        assertThat(inbox.stored("k1")).contains(replacement);
+        assertThat(published).isEmpty();
+    }
+
+    @Test
+    void markReplaced_keyWithoutAPendingRecord_changesNothing() {
+        repository.save(pendingRecord(envelope(EnvelopeStatus.QUARANTINED), QuarantineLocation.inbox())
+                .resolve(QuarantineResolution.purged(Instant.now(), Resolver.identified("ana", "people"))));
+
+        assertThat(quarantinedEnvelopes.markReplaced(KEY)).isFalse();
+        assertThat(quarantinedEnvelopes.markReplaced(IdempotencyKey.of("without-record"))).isFalse();
+
+        assertThat(repository.find(KEY)).map(QuarantinedRecord::status).contains(QuarantineStatus.PURGED);
+    }
+
+    @Test
     void republishAndPurge_keyWithoutRecord_skipItAndPublishNothing() {
         Envelope captured = envelope(EnvelopeStatus.CAPTURED);
         inbox.with(captured);

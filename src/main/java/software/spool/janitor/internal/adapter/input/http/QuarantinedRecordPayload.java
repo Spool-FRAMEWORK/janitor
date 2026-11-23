@@ -86,6 +86,9 @@ record QuarantinedRecordPayload(String key, String status, LocationPayload locat
                 case QuarantineResolution.Purged purged ->
                         new ResolutionPayload(purged.status().name(), Optional.of(purged.at()), ResolverPayload.of(purged.by()),
                                 Optional.empty(), Optional.empty());
+                case QuarantineResolution.Replaced replaced ->
+                        new ResolutionPayload(replaced.status().name(), Optional.of(replaced.at()), Optional.empty(),
+                                Optional.empty(), Optional.empty());
             };
         }
     }

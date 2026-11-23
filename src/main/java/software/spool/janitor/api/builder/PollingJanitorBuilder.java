@@ -226,7 +226,7 @@ public class PollingJanitorBuilder {
                 .<QuarantineServer>map(settings -> new HttpQuarantineServer(quarantinedEnvelopes, quarantinedEnvelopes,
                         quarantinedEnvelopes, quarantinedEnvelopes, settings.authenticator(), settings.roles(), settings.pageSizes()))
                 .orElseGet(QuarantineServer::none);
-        return new Janitor(initializeStrategy(), getErrorRouter(), heartBeat, quarantinedEnvelopes, quarantineServer);
+        return new Janitor(initializeStrategy(quarantinedEnvelopes), getErrorRouter(), heartBeat, quarantinedEnvelopes, quarantineServer);
     }
 
     private record QuarantineServerSettings(RequestAuthenticator authenticator, QuarantineRoles roles,
@@ -244,9 +244,9 @@ public class PollingJanitorBuilder {
         return Objects.requireNonNullElse(errorRouter, JanitorErrorRouter.defaults(publisher));
     }
 
-    private PollingJanitorStrategy initializeStrategy() {
+    private PollingJanitorStrategy initializeStrategy(QuarantinedEnvelopes quarantinedEnvelopes) {
         return new PollingJanitorStrategy(reader, subscriber, initializeJanitorScheduleHandler(), pollingConfiguration,
-                Objects.requireNonNullElse(maxInboxUpdateAttempts, 3), getErrorRouter());
+                Objects.requireNonNullElse(maxInboxUpdateAttempts, 3), getErrorRouter(), quarantinedEnvelopes::markReplaced);
     }
 
     private JanitorCycle initializeJanitorScheduleHandler() {

@@ -3,6 +3,7 @@ package software.spool.janitor.api.strategy;
 import org.junit.jupiter.api.Test;
 import software.spool.core.model.Event;
 import software.spool.core.model.event.EnvelopePersisted;
+import software.spool.core.model.event.QuarantinedEnvelopeReplaced;
 import software.spool.core.model.failure.EnvelopeQuarantined;
 import software.spool.core.model.quarantine.QuarantineReason;
 import software.spool.core.model.schedule.Schedule;
@@ -140,6 +141,33 @@ class PollingJanitorStrategyTest {
         scheduler.runCycle();
 
         assertThat(reported).isEmpty();
+    }
+
+    @Test
+    void execute_aCaptureThatReplacedAQuarantinedEnvelope_marksItsQuarantineAsReplaced() {
+        List<IdempotencyKey> replaced = new ArrayList<>();
+        new PollingJanitorStrategy(status -> List.of(), bus, dto -> EventsDTO.none(),
+                new PollingConfiguration(scheduler, Schedule.every(Duration.ofSeconds(1))), 3,
+                new ErrorRouter().orElse((exception, context) -> reported.add(exception)), replaced::add)
+                .execute(CancellationToken.create());
+
+        bus.emit(QuarantinedEnvelopeReplaced.of(IdempotencyKey.of("boe-a-1"), "corr-1"));
+
+        assertThat(replaced).containsExactly(IdempotencyKey.of("boe-a-1"));
+    }
+
+    @Test
+    void execute_markingAQuarantineAsReplacedThatFails_isReported() {
+        new PollingJanitorStrategy(status -> List.of(), bus, dto -> EventsDTO.none(),
+                new PollingConfiguration(scheduler, Schedule.every(Duration.ofSeconds(1))), 3,
+                new ErrorRouter().orElse((exception, context) -> reported.add(exception)),
+                key -> { throw new IllegalStateException("the quarantine could not be read"); })
+                .execute(CancellationToken.create());
+
+        bus.emit(QuarantinedEnvelopeReplaced.of(IdempotencyKey.of("boe-a-1"), "corr-1"));
+
+        assertThat(reported).singleElement().satisfies(exception ->
+                assertThat(exception).hasMessageContaining("the quarantine could not be read"));
     }
 
     private void start(JanitorCycle extra) {
