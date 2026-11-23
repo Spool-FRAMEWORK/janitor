@@ -3,13 +3,18 @@ info:
   title: Spool quarantine API
   version: 1.0.0
   description: >
-    Review and resolve what a janitor keeps in quarantine (ADR-014). The janitor serves it on its node's HTTP server
-    when its descriptor has a quarantineServer block. Every call is identified by the authentication provider that
+    Review and resolve what a janitor keeps in quarantine: envelopes a validator rejected and mount results that
+    could not be written. The janitor serves it on its node's HTTP server when its descriptor has a quarantineServer
+    block. Every call is identified by the authentication provider that
     block names, and each operation needs the role the block gives it: read, resolve or bypass.
+servers:
+  - url: http://localhost:8080
+    description: The node of the janitor on this machine, on the default port of server.port
 paths:
   /spool/quarantine:
     get:
       summary: List the records in a status, page by page, in the order of their keys
+      operationId: listQuarantinedRecords
       parameters:
         - name: status
           in: query
@@ -46,6 +51,7 @@ paths:
       - $ref: '#/components/parameters/Key'
     get:
       summary: One record with its envelope and its history
+      operationId: getQuarantinedRecord
       responses:
         '200':
           $ref: '#/components/responses/Record'
@@ -56,6 +62,7 @@ paths:
       - $ref: '#/components/parameters/Key'
     post:
       summary: Send the envelope back as it was (role resolve)
+      operationId: republishQuarantinedRecord
       responses:
         '200':
           $ref: '#/components/responses/Record'
@@ -70,6 +77,7 @@ paths:
       - $ref: '#/components/parameters/Key'
     post:
       summary: Send back a new envelope with the payload of the body, which says which one it comes from (role resolve)
+      operationId: amendQuarantinedRecord
       requestBody:
         required: true
         description: The amended payload, as it is, in the media type of the envelope.
@@ -94,6 +102,7 @@ paths:
       - $ref: '#/components/parameters/Key'
     post:
       summary: Let the envelope through although a validator rejected it (role bypass). A mount result cannot be let through and answers 409
+      operationId: bypassQuarantinedRecord
       requestBody:
         required: true
         content:
@@ -118,6 +127,7 @@ paths:
       - $ref: '#/components/parameters/Key'
     post:
       summary: Discard the envelope for good (role resolve)
+      operationId: purgeQuarantinedRecord
       responses:
         '200':
           $ref: '#/components/responses/Record'
