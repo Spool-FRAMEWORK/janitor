@@ -3,7 +3,6 @@ package software.spool.janitor.api.builder;
 import software.spool.core.model.Event;
 import software.spool.core.model.schedule.Schedule;
 import software.spool.core.port.bus.EventPublisher;
-import software.spool.core.port.idempotency.ProcessedKeyRepository;
 import software.spool.core.port.inbox.InboxUpdater;
 import software.spool.core.port.metrics.MetricsRegistry;
 import software.spool.core.port.quarantine.QuarantineRepository;
@@ -16,6 +15,7 @@ import software.spool.janitor.api.fixture.ManualScheduler;
 import software.spool.janitor.api.strategy.PollingJanitorStrategy;
 import software.spool.janitor.internal.control.JanitorScheduleHandler;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -33,7 +33,7 @@ public final class JanitorRounds {
     private final List<Exception> reported = new ArrayList<>();
 
     public JanitorRounds(FakeInbox inbox, InboxUpdater updater, QuarantineRepository quarantineRepository,
-                         int maxInboxUpdateAttempts, Optional<ProcessedKeyRepository> processedKeys) {
+                         int maxInboxUpdateAttempts, Optional<Duration> processedKeysWindow, Clock clock) {
         PollingJanitorBuilder builder = JanitorBuilderFactory.watchdog(null, "janitor-test")
                 .polling()
                 .from(inbox)
@@ -43,7 +43,8 @@ public final class JanitorRounds {
                 .subscribeWith(bus)
                 .quarantineIn(quarantineRepository)
                 .schedule(Schedule.every(Duration.ofSeconds(1)));
-        processedKeys.ifPresent(builder::rememberProcessedKeysIn);
+        processedKeysWindow.ifPresent(builder::rememberProcessedKeysFor);
+        builder.clock(clock);
         JanitorScheduleHandler handler = new JanitorScheduleHandler(builder.initializePipeline((value, attributes) -> {}),
                 new ErrorRouter(), MetricsRegistry.NOOP.counter("completed", "", "1"),
                 MetricsRegistry.NOOP.counter("failed", "", "1"), MetricsRegistry.NOOP.timer("duration", "", "ms"));

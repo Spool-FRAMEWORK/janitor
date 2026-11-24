@@ -8,7 +8,7 @@ import software.spool.core.model.vo.Envelope;
 import software.spool.core.model.vo.IdempotencyKey;
 import software.spool.core.pipeline.PipelineContext;
 import software.spool.core.pipeline.Step;
-import software.spool.core.port.idempotency.ProcessedKeyRepository;
+import software.spool.core.port.idempotency.ProcessedKeyWindow;
 import software.spool.core.port.inbox.InboxUpdater;
 import software.spool.core.port.logging.Logger;
 
@@ -23,9 +23,9 @@ import java.util.List;
 public class UpdatePersistedEnvelopesStep implements Step<PipelineContext, PipelineContext> {
     private static final Logger LOG = LoggerFactory.getLogger(UpdatePersistedEnvelopesStep.class);
     private final InboxUpdater updater;
-    private final ProcessedKeyRepository processedKeys;
+    private final ProcessedKeyWindow processedKeys;
 
-    public UpdatePersistedEnvelopesStep(InboxUpdater updater, ProcessedKeyRepository processedKeys) {
+    public UpdatePersistedEnvelopesStep(InboxUpdater updater, ProcessedKeyWindow processedKeys) {
         this.updater = updater;
         this.processedKeys = processedKeys;
     }
@@ -35,13 +35,13 @@ public class UpdatePersistedEnvelopesStep implements Step<PipelineContext, Pipel
         Collection<EnvelopePersisted> events = context.require(JanitorScheduleKeys.ENVELOPES_PERSISTED);
         List<IdempotencyKey> keys = events.stream()
                 .map(EnvelopePersisted::idempotencyKey)
-                .filter(key -> !processedKeys.contains(key))
+                .filter(key -> !processedKeys.remembers(key))
                 .distinct()
                 .toList();
         if (keys.isEmpty()) return context;
         try {
             Collection<Envelope> result = updater.update(keys, EnvelopeStatus.PERSISTED);
-            result.forEach(envelope -> processedKeys.save(envelope.idempotencyKey()));
+            result.forEach(envelope -> processedKeys.remember(envelope.idempotencyKey()));
             LOG.info("Updated {} persisted envelopes from inbox", result.size());
         } catch (InboxUpdateException exception) {
             LOG.warn("Could not mark {} envelopes as persisted in the inbox; trying again in the next round: {}",

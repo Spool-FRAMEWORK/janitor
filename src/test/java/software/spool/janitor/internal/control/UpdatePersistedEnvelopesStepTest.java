@@ -2,6 +2,7 @@ package software.spool.janitor.internal.control;
 
 import org.junit.jupiter.api.Test;
 import software.spool.core.adapter.memory.InMemoryProcessedKeyRepository;
+import software.spool.core.port.idempotency.ProcessedKeyWindow;
 import software.spool.core.exception.InboxUpdateException;
 import software.spool.core.model.event.EnvelopePersisted;
 import software.spool.core.model.vo.IdempotencyKey;
@@ -19,7 +20,7 @@ class UpdatePersistedEnvelopesStepTest {
     void apply_inboxFails_keepsTheEventsAsUnappliedInsteadOfFailing() throws AttributeNotFoundException {
         UpdatePersistedEnvelopesStep step = new UpdatePersistedEnvelopesStep(
                 (keys, status) -> { throw new InboxUpdateException(keys, "inbox unavailable"); },
-                InMemoryProcessedKeyRepository.remembering(InMemoryProcessedKeyRepository.DEFAULT_WINDOW));
+                ProcessedKeyWindow.of(new InMemoryProcessedKeyRepository(), ProcessedKeyWindow.DEFAULT_WINDOW));
         UnappliedEvents unapplied = new UnappliedEvents();
         EnvelopePersisted event = EnvelopePersisted.builder()
                 .idempotencyKey(IdempotencyKey.of("k1"))

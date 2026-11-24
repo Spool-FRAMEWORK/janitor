@@ -11,6 +11,7 @@ import software.spool.core.port.decorator.SafeEventPublisher;
 import software.spool.core.port.decorator.SafeEventSubscriber;
 import software.spool.core.port.decorator.SafeInboxUpdater;
 import software.spool.core.port.idempotency.ProcessedKeyRepository;
+import software.spool.core.port.idempotency.ProcessedKeyWindow;
 import software.spool.core.port.inbox.InboxEnvelopeRemover;
 import software.spool.core.port.inbox.InboxStatusQuery;
 import software.spool.core.port.inbox.InboxUpdater;
@@ -35,6 +36,7 @@ import software.spool.janitor.api.utils.JanitorErrorRouter;
 import software.spool.janitor.internal.control.*;
 import software.spool.janitor.internal.port.decorator.SafeInboxStatusQuery;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -60,8 +62,9 @@ public class PollingJanitorBuilder {
     private Long millisecondsQuarantineRetention;
     private Integer maxRetries;
     private Integer maxInboxUpdateAttempts;
-    private Duration processedKeysWindow = InMemoryProcessedKeyRepository.DEFAULT_WINDOW;
+    private Duration processedKeysWindow = ProcessedKeyWindow.DEFAULT_WINDOW;
     private Optional<ProcessedKeyRepository> processedKeys = Optional.empty();
+    private Clock clock = Clock.systemUTC();
     private final MetricsRegistry metricsRegistry = new OpenTelemetryMetricsRegistry();
 
     PollingJanitorBuilder(ModuleHeartBeat heartBeat) {
@@ -196,7 +199,7 @@ public class PollingJanitorBuilder {
 
     /**
      * How long the janitor remembers the keys it marked as persisted, so a repeated EnvelopePersisted does not start
-     * their TTL again (ADR-007). {@link InMemoryProcessedKeyRepository#DEFAULT_WINDOW} by default.
+     * their TTL again (ADR-007). {@link ProcessedKeyWindow#DEFAULT_WINDOW} by default.
      */
     public PollingJanitorBuilder rememberProcessedKeysFor(Duration window) {
         this.processedKeysWindow = Objects.requireNonNull(window);
@@ -206,6 +209,12 @@ public class PollingJanitorBuilder {
     /** Where the janitor remembers the keys it marked as persisted; in the memory of the process by default. */
     public PollingJanitorBuilder rememberProcessedKeysIn(ProcessedKeyRepository processedKeys) {
         this.processedKeys = Optional.of(processedKeys);
+        return this;
+    }
+
+    /** The clock the windows of the janitor count with. The clock of the system by default. */
+    public PollingJanitorBuilder clock(Clock clock) {
+        this.clock = Objects.requireNonNull(clock);
         return this;
     }
 
@@ -275,8 +284,8 @@ public class PollingJanitorBuilder {
                         new RepublishStuckEnvelopesStep(reader, updater, publisher, millis(millisecondsThreshold), Objects.requireNonNullElse(maxRetries, 3), recordsCleaned)));
     }
 
-    private ProcessedKeyRepository processedKeys() {
-        return processedKeys.orElseGet(() -> InMemoryProcessedKeyRepository.remembering(processedKeysWindow));
+    private ProcessedKeyWindow processedKeys() {
+        return new ProcessedKeyWindow(processedKeys.orElseGet(InMemoryProcessedKeyRepository::new), processedKeysWindow, clock);
     }
 
     /** A value that was not set stays null, and each step falls back to its own default. */
