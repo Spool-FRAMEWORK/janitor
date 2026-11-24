@@ -3,11 +3,15 @@ package software.spool.janitor.internal.control;
 import org.junit.jupiter.api.Test;
 import software.spool.core.model.EnvelopeStatus;
 import software.spool.core.model.vo.*;
+import software.spool.core.adapter.memory.InMemoryProcessedKeyRepository;
 import software.spool.core.pipeline.PipelineContext;
+import software.spool.core.port.idempotency.ProcessedKeyRepository;
+import software.spool.core.port.idempotency.ProcessedKeyWindow;
 import software.spool.core.port.inbox.InboxStatusQuery;
 import software.spool.core.port.metrics.SpoolMetrics;
 import software.spool.core.utils.routing.ErrorRouter;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -15,6 +19,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -148,6 +153,71 @@ class RemoveExpiredEnvelopesStepTest {
         step.apply(PipelineContext.empty());
 
         assertThat(countedByReason).isEmpty();
+    }
+
+    @Test
+    void apply_withADeduplicationWindow_remembersTheKeyOfEachRemovedEnvelopeFromWhenItWasProcessed() {
+        List<String> happened = new ArrayList<>();
+        Instant processedAt = Instant.parse("2000-01-01T00:00:00Z");
+        Envelope expired = anyEnvelope(processedAt);
+        ProcessedKeyRepository processedKeys = recording(happened);
+        RemoveExpiredEnvelopesStep step = new RemoveExpiredEnvelopesStep(
+            new ErrorRouter(),
+            Duration.ofDays(1),
+            keys -> { keys.forEach(key -> happened.add("removed " + key.value())); return List.of(); },
+            status -> List.of(expired),
+            (value, attributes) -> {},
+            Optional.of(new ProcessedKeyWindow(processedKeys, Duration.ofDays(365 * 100), Clock.systemUTC()))
+        );
+
+        step.apply(PipelineContext.empty());
+
+        assertThat(happened).containsExactly("remembered " + expired.idempotencyKey().value() + " at " + processedAt,
+                "removed " + expired.idempotencyKey().value());
+        assertThat(processedKeys.contains(expired.idempotencyKey())).isTrue();
+    }
+
+    @Test
+    void apply_withADeduplicationWindow_forgetsTheKeysProcessedLongerThanTheWindowAgo() {
+        InMemoryProcessedKeyRepository processedKeys = new InMemoryProcessedKeyRepository();
+        IdempotencyKey old = IdempotencyKey.of("old");
+        IdempotencyKey recent = IdempotencyKey.of("recent");
+        processedKeys.save(new ProcessedKey(old, Instant.now().minus(Duration.ofDays(31))));
+        processedKeys.save(new ProcessedKey(recent, Instant.now().minus(Duration.ofDays(29))));
+        RemoveExpiredEnvelopesStep step = new RemoveExpiredEnvelopesStep(
+            new ErrorRouter(),
+            Duration.ofDays(1),
+            keys -> List.of(),
+            status -> List.of(),
+            (value, attributes) -> {},
+            Optional.of(new ProcessedKeyWindow(processedKeys, Duration.ofDays(30), Clock.systemUTC()))
+        );
+
+        step.apply(PipelineContext.empty());
+
+        assertThat(processedKeys.contains(old)).isFalse();
+        assertThat(processedKeys.contains(recent)).isTrue();
+    }
+
+    private static ProcessedKeyRepository recording(List<String> happened) {
+        InMemoryProcessedKeyRepository kept = new InMemoryProcessedKeyRepository();
+        return new ProcessedKeyRepository() {
+            @Override
+            public boolean contains(IdempotencyKey key) {
+                return kept.contains(key);
+            }
+
+            @Override
+            public void save(ProcessedKey processedKey) {
+                happened.add("remembered " + processedKey.key().value() + " at " + processedKey.processedAt());
+                kept.save(processedKey);
+            }
+
+            @Override
+            public void forgetProcessedBefore(Instant moment) {
+                kept.forgetProcessedBefore(moment);
+            }
+        };
     }
 
     private static InboxStatusQuery inboxAnswering(List<EnvelopeStatus> askedStatuses, List<Instant> askedLimits, Envelope answer) {

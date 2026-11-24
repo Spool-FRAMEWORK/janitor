@@ -44,6 +44,9 @@ import java.util.Objects;
 import java.util.Optional;
 
 public class PollingJanitorBuilder {
+    /** How long a persisted envelope stays in the inbox when the descriptor declares no ttl. */
+    public static final Duration DEFAULT_TTL = Duration.ofDays(1);
+
     private Optional<QuarantineServerSettings> quarantineServerSettings = Optional.empty();
     private final ModuleHeartBeat heartBeat;
     private InboxStatusQuery reader;
@@ -65,6 +68,7 @@ public class PollingJanitorBuilder {
     private Duration processedKeysWindow = ProcessedKeyWindow.DEFAULT_WINDOW;
     private Optional<ProcessedKeyRepository> processedKeys = Optional.empty();
     private Clock clock = Clock.systemUTC();
+    private Optional<Deduplication> deduplication = Optional.empty();
     private final MetricsRegistry metricsRegistry = new OpenTelemetryMetricsRegistry();
 
     PollingJanitorBuilder(ModuleHeartBeat heartBeat) {
@@ -212,6 +216,16 @@ public class PollingJanitorBuilder {
         return this;
     }
 
+    /**
+     * Keeps remembering the key of each envelope removed by its TTL for the given window, counted from when it was
+     * processed, so the same record is still a duplicate after its envelope is gone (ADR-033). Without it, a record
+     * is a duplicate only while its envelope is in the inbox.
+     */
+    public PollingJanitorBuilder deduplicateFor(Duration window, ProcessedKeyRepository processedKeys) {
+        this.deduplication = Optional.of(new Deduplication(Objects.requireNonNull(window), Objects.requireNonNull(processedKeys)));
+        return this;
+    }
+
     /** The clock the windows of the janitor count with. The clock of the system by default. */
     public PollingJanitorBuilder clock(Clock clock) {
         this.clock = Objects.requireNonNull(clock);
@@ -271,7 +285,8 @@ public class PollingJanitorBuilder {
                 .add(new ObservedStep<>("update-persisted", new UpdatePersistedEnvelopesStep(updater, processedKeys())))
                 .add(new ObservedStep<>("quarantine-envelopes", new QuarantineFailedEnvelopesStep(updater, quarantineRepository, recordsCleaned)))
                 .add(new ObservedStep<>("expired-envelopes",
-                        new RemoveExpiredEnvelopesStep(getErrorRouter(), millis(millisecondsTtl), remover, reader, recordsCleaned)));
+                        new RemoveExpiredEnvelopesStep(getErrorRouter(), millis(millisecondsTtl), remover, reader, recordsCleaned,
+                                deduplication.map(chosen -> new ProcessedKeyWindow(chosen.processedKeys(), chosen.window(), clock)))));
         Pipeline<PipelineContext, PipelineContext> withQuarantineExpiry = millisecondsQuarantineTtl == null ? expiry : expiry
                 .add(new ObservedStep<>("expired-quarantine",
                         new PurgeExpiredQuarantineStep(getErrorRouter(), millis(millisecondsQuarantineTtl), reader, remover, recordsCleaned)));
@@ -291,5 +306,8 @@ public class PollingJanitorBuilder {
     /** A value that was not set stays null, and each step falls back to its own default. */
     private static Duration millis(Integer value) {
         return value == null ? null : Duration.ofMillis(value);
+    }
+
+    private record Deduplication(Duration window, ProcessedKeyRepository processedKeys) {
     }
 }
